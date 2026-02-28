@@ -36,6 +36,9 @@ sudo spank --sexy
 
 # Halo mode — plays Halo death sounds when slapped
 sudo spank --halo
+
+# Custom mode — plays your own MP3 files from a directory
+sudo spank --custom /path/to/mp3s
 ```
 
 ### Modes
@@ -45,6 +48,8 @@ sudo spank --halo
 **Sexy mode** (`--sexy`): Tracks slaps within a rolling 5-minute window. The more you slap, the more intense the audio response. 60 levels of escalation.
 
 **Halo mode** (`--halo`): Randomly plays from death sound effects from the Halo video game series when a slap is detected.
+
+**Custom mode** (`--custom`): Randomly plays MP3 files from a custom directory you specify.
 
 ## Running as a Service
 
