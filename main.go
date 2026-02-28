@@ -66,7 +66,7 @@ const (
 	decayHalfLife = 30.0
 
 	// slapCooldown prevents rapid-fire audio playback.
-	slapCooldown = 500 * time.Millisecond
+	slapCooldown = 750 * time.Millisecond
 
 	// sensorPollInterval is how often we check for new accelerometer data.
 	sensorPollInterval = 10 * time.Millisecond
@@ -130,12 +130,13 @@ type slapTracker struct {
 }
 
 func newSlapTracker(pack *soundPack) *slapTracker {
-	// scale is derived so that the theoretical max steady-state score
-	// (at peak slap rate with slapCooldown) maps to approximately the
-	// second-to-last file, making the last file asymptotically unreachable.
+	// scale maps the exponential curve so that sustained max-rate
+	// slapping (one per cooldown) reaches the final file. At steady
+	// state the score converges to ssMax; we set scale so that score
+	// maps to the last index.
 	cooldownSec := slapCooldown.Seconds()
 	ssMax := 1.0 / (1.0 - math.Pow(0.5, cooldownSec/decayHalfLife))
-	scale := (ssMax - 1) / math.Log(float64(len(pack.files)))
+	scale := (ssMax - 1) / math.Log(float64(len(pack.files)+1))
 	return &slapTracker{
 		halfLife: decayHalfLife,
 		scale:    scale,
@@ -162,10 +163,11 @@ func (st *slapTracker) getFile(score float64) string {
 		return st.pack.files[rand.Intn(len(st.pack.files))]
 	}
 
-	// Escalation: 1-exp(-x) curve asymptotically approaches the top
-	// without ever reaching it. Slap faster to climb; slow down to decay.
+	// Escalation: 1-exp(-x) curve maps score to file index.
+	// At sustained max slap rate, score reaches ssMax which maps
+	// to the final file.
 	maxIdx := len(st.pack.files) - 1
-	idx := int(float64(maxIdx) * (1.0 - math.Exp(-(score-1)/st.scale)))
+	idx := int(float64(len(st.pack.files)) * (1.0 - math.Exp(-(score-1)/st.scale)))
 	if idx > maxIdx {
 		idx = maxIdx
 	}
