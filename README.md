@@ -37,6 +37,9 @@ sudo spank --sexy
 # Halo mode — plays Halo death sounds when slapped
 sudo spank --halo
 
+# Custom mode — plays your own MP3 files from a directory
+sudo spank --custom /path/to/mp3s
+
 # Adjust sensitivity with amplitude threshold (lower = more sensitive)
 sudo spank --min-amplitude 0.1   # more sensitive
 sudo spank --min-amplitude 0.25  # less sensitive
@@ -51,12 +54,14 @@ sudo spank --sexy --min-amplitude 0.2
 
 **Halo mode** (`--halo`): Randomly plays from death sound effects from the Halo video game series when a slap is detected.
 
+**Custom mode** (`--custom`): Randomly plays MP3 files from a custom directory you specify.
+
 ### Sensitivity
 
-Control detection sensitivity with `--min-amplitude` (default: 0.15):
+Control detection sensitivity with `--min-amplitude` (default: 0.3):
 
 - Lower values (e.g., 0.05-0.10): Very sensitive, detects light taps
-- Medium values (e.g., 0.15-0.30): Balanced sensitivity (default)
+- Medium values (e.g., 0.15-0.30): Balanced sensitivity
 - Higher values (e.g., 0.30-0.50): Only strong impacts trigger sounds
 
 The value represents the minimum acceleration amplitude (in g-force) required to trigger a sound.

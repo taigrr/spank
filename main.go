@@ -42,6 +42,7 @@ var haloAudio embed.FS
 var (
 	sexyMode     bool
 	haloMode     bool
+	customPath   string
 	minAmplitude float64
 )
 
@@ -60,22 +61,36 @@ const (
 )
 
 type soundPack struct {
-	name  string
-	fs    embed.FS
-	dir   string
-	mode  playMode
-	files []string
+	name   string
+	fs     embed.FS
+	dir    string
+	mode   playMode
+	files  []string
+	custom bool
 }
 
 func (sp *soundPack) loadFiles() error {
-	entries, err := sp.fs.ReadDir(sp.dir)
-	if err != nil {
-		return err
-	}
-	sp.files = make([]string, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
-			sp.files = append(sp.files, sp.dir+"/"+e.Name())
+	if sp.custom {
+		entries, err := os.ReadDir(sp.dir)
+		if err != nil {
+			return err
+		}
+		sp.files = make([]string, 0, len(entries))
+		for _, e := range entries {
+			if !e.IsDir() {
+				sp.files = append(sp.files, sp.dir+"/"+e.Name())
+			}
+		}
+	} else {
+		entries, err := sp.fs.ReadDir(sp.dir)
+		if err != nil {
+			return err
+		}
+		sp.files = make([]string, 0, len(entries))
+		for _, e := range entries {
+			if !e.IsDir() {
+				sp.files = append(sp.files, sp.dir+"/"+e.Name())
+			}
 		}
 	}
 	sort.Strings(sp.files)
@@ -161,6 +176,7 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 
 	cmd.Flags().BoolVarP(&sexyMode, "sexy", "s", false, "Enable sexy mode")
 	cmd.Flags().BoolVarP(&haloMode, "halo", "H", false, "Enable halo mode")
+	cmd.Flags().StringVarP(&customPath, "custom", "c", "", "Path to custom MP3 audio directory")
 	cmd.Flags().Float64Var(&minAmplitude, "min-amplitude", 0.3, "Minimum amplitude threshold (0.0-1.0, lower = more sensitive)")
 
 	if err := fang.Execute(context.Background(), cmd); err != nil {
@@ -176,6 +192,9 @@ func run(ctx context.Context) error {
 	if sexyMode && haloMode {
 		return fmt.Errorf("--sexy and --halo are mutually exclusive; pick one")
 	}
+	if customPath != "" && (sexyMode || haloMode) {
+		return fmt.Errorf("--custom cannot be used with --sexy or --halo")
+	}
 
 	if minAmplitude < 0 || minAmplitude > 1 {
 		return fmt.Errorf("--min-amplitude must be between 0.0 and 1.0")
@@ -183,6 +202,8 @@ func run(ctx context.Context) error {
 
 	var pack *soundPack
 	switch {
+	case customPath != "":
+		pack = &soundPack{name: "custom", dir: customPath, mode: modeRandom, custom: true}
 	case sexyMode:
 		pack = &soundPack{name: "sexy", fs: sexyAudio, dir: "audio/sexy", mode: modeEscalation}
 	case haloMode:
@@ -282,7 +303,7 @@ func run(ctx context.Context) error {
 						num, score := tracker.record(now)
 						file := tracker.getFile(score)
 						fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", num, ev.Severity, ev.Amplitude, file)
-						go playEmbedded(pack.fs, file, &speakerInit)
+						go playAudio(pack, file, &speakerInit)
 					}
 				}
 			}
@@ -292,15 +313,29 @@ func run(ctx context.Context) error {
 
 var speakerMu sync.Mutex
 
-func playEmbedded(fs embed.FS, path string, speakerInit *bool) {
-	data, err := fs.ReadFile(path)
-	if err != nil {
-		return
-	}
+func playAudio(pack *soundPack, path string, speakerInit *bool) {
+	var streamer beep.StreamSeekCloser
+	var format beep.Format
 
-	streamer, format, err := mp3.Decode(io.NopCloser(bytes.NewReader(data)))
-	if err != nil {
-		return
+	if pack.custom {
+		file, err := os.Open(path)
+		if err != nil {
+			return
+		}
+		defer file.Close()
+		streamer, format, err = mp3.Decode(file)
+		if err != nil {
+			return
+		}
+	} else {
+		data, err := pack.fs.ReadFile(path)
+		if err != nil {
+			return
+		}
+		streamer, format, err = mp3.Decode(io.NopCloser(bytes.NewReader(data)))
+		if err != nil {
+			return
+		}
 	}
 	defer streamer.Close()
 
