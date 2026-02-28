@@ -36,6 +36,11 @@ sudo spank --sexy
 
 # Halo mode — plays Halo death sounds when slapped
 sudo spank --halo
+
+# Adjust sensitivity with amplitude threshold (lower = more sensitive)
+sudo spank --min-amplitude 0.1   # more sensitive
+sudo spank --min-amplitude 0.25  # less sensitive
+sudo spank --sexy --min-amplitude 0.2
 ```
 
 ### Modes
@@ -45,6 +50,16 @@ sudo spank --halo
 **Sexy mode** (`--sexy`): Tracks slaps within a rolling 5-minute window. The more you slap, the more intense the audio response. 60 levels of escalation.
 
 **Halo mode** (`--halo`): Randomly plays from death sound effects from the Halo video game series when a slap is detected.
+
+### Sensitivity
+
+Control detection sensitivity with `--min-amplitude` (default: 0.15):
+
+- Lower values (e.g., 0.05-0.10): Very sensitive, detects light taps
+- Medium values (e.g., 0.15-0.30): Balanced sensitivity (default)
+- Higher values (e.g., 0.30-0.50): Only strong impacts trigger sounds
+
+The value represents the minimum acceleration amplitude (in g-force) required to trigger a sound.
 
 ## Running as a Service
 
