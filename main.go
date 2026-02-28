@@ -9,6 +9,7 @@ import (
 	"embed"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -81,40 +82,44 @@ func (sp *soundPack) loadFiles() error {
 }
 
 type slapTracker struct {
-	mu     sync.Mutex
-	times  []time.Time
-	window time.Duration
-	pack   *soundPack
-	altIdx int
+	mu       sync.Mutex
+	score    float64
+	lastTime time.Time
+	total    int
+	halfLife float64 // seconds
+	scale    float64 // controls the escalation curve shape
+	pack     *soundPack
 }
 
 func newSlapTracker(pack *soundPack) *slapTracker {
+	halfLife := 30.0 // seconds — intensity halves every 30s of inactivity
+	// scale is derived so that the theoretical max steady-state score
+	// (at peak slap rate with 500ms cooldown) maps to approximately the
+	// second-to-last file, making the last file asymptotically unreachable.
+	ssMax := 1.0 / (1.0 - math.Pow(0.5, 0.5/halfLife))
+	scale := (ssMax - 1) / math.Log(float64(len(pack.files)))
 	return &slapTracker{
-		window: 5 * time.Minute,
-		pack:   pack,
+		halfLife: halfLife,
+		scale:   scale,
+		pack:    pack,
 	}
 }
 
-func (st *slapTracker) record(t time.Time) int {
+func (st *slapTracker) record(t time.Time) (int, float64) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
-	cutoff := t.Add(-st.window)
-	newTimes := make([]time.Time, 0, len(st.times)+1)
-	for _, tt := range st.times {
-		if tt.After(cutoff) {
-			newTimes = append(newTimes, tt)
-		}
+	if !st.lastTime.IsZero() {
+		elapsed := t.Sub(st.lastTime).Seconds()
+		st.score *= math.Pow(0.5, elapsed/st.halfLife)
 	}
-	newTimes = append(newTimes, t)
-	st.times = newTimes
-	return len(st.times)
+	st.score += 1.0
+	st.lastTime = t
+	st.total++
+	return st.total, st.score
 }
 
-func (st *slapTracker) getFile(count int) string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
+func (st *slapTracker) getFile(score float64) string {
 	if len(st.pack.files) == 0 {
 		return ""
 	}
@@ -123,25 +128,10 @@ func (st *slapTracker) getFile(count int) string {
 		return st.pack.files[rand.Intn(len(st.pack.files))]
 	}
 
-	// Escalation mode
+	// Escalation: 1-exp(-x) curve asymptotically approaches the top
+	// without ever reaching it. Slap faster to climb; slow down to decay.
 	maxIdx := len(st.pack.files) - 1
-	topTwo := maxIdx - 1
-	if topTwo < 0 {
-		topTwo = 0
-	}
-
-	var idx int
-	if count >= 20 {
-		st.altIdx = 1 - st.altIdx
-		idx = topTwo + st.altIdx
-	} else {
-		ratio := float64(count) / 20.0
-		if ratio > 1 {
-			ratio = 1
-		}
-		idx = int(ratio * float64(topTwo))
-	}
-
+	idx := int(float64(maxIdx) * (1.0 - math.Exp(-(score-1)/st.scale)))
 	if idx > maxIdx {
 		idx = maxIdx
 	}
@@ -283,9 +273,9 @@ func run(ctx context.Context) error {
 				if time.Since(lastYell) > cooldown {
 					if ev.Severity == "CHOC_MAJEUR" || ev.Severity == "CHOC_MOYEN" || ev.Severity == "MICRO_CHOC" {
 						lastYell = now
-						count := tracker.record(now)
-						file := tracker.getFile(count)
-						fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", count, ev.Severity, ev.Amplitude, file)
+						num, score := tracker.record(now)
+						file := tracker.getFile(score)
+						fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", num, ev.Severity, ev.Amplitude, file)
 						go playEmbedded(pack.fs, file, &speakerInit)
 					}
 				}
