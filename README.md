@@ -188,6 +188,10 @@ sudo launchctl unload /Library/LaunchDaemons/com.taigrr.spank.plist
 3. When a significant impact is detected, plays an embedded MP3 response
 4. 750ms cooldown between responses to prevent rapid-fire
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=taigrr/spank&type=date&legend=top-left)](https://www.star-history.com/#taigrr/spank&type=date&legend=top-left)
+
 ## Credits
 
 Sensor reading and vibration detection ported from [olvvier/apple-silicon-accelerometer](https://github.com/olvvier/apple-silicon-accelerometer).
