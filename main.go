@@ -9,6 +9,7 @@ import (
 	"embed"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -39,8 +40,10 @@ var sexyAudio embed.FS
 var haloAudio embed.FS
 
 var (
-	sexyMode bool
-	haloMode bool
+	sexyMode     bool
+	haloMode     bool
+	customPath   string
+	minAmplitude float64
 )
 
 // sensorReady is closed once shared memory is created and the sensor
@@ -58,22 +61,36 @@ const (
 )
 
 type soundPack struct {
-	name  string
-	fs    embed.FS
-	dir   string
-	mode  playMode
-	files []string
+	name   string
+	fs     embed.FS
+	dir    string
+	mode   playMode
+	files  []string
+	custom bool
 }
 
 func (sp *soundPack) loadFiles() error {
-	entries, err := sp.fs.ReadDir(sp.dir)
-	if err != nil {
-		return err
-	}
-	sp.files = make([]string, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
-			sp.files = append(sp.files, sp.dir+"/"+e.Name())
+	if sp.custom {
+		entries, err := os.ReadDir(sp.dir)
+		if err != nil {
+			return err
+		}
+		sp.files = make([]string, 0, len(entries))
+		for _, e := range entries {
+			if !e.IsDir() {
+				sp.files = append(sp.files, sp.dir+"/"+e.Name())
+			}
+		}
+	} else {
+		entries, err := sp.fs.ReadDir(sp.dir)
+		if err != nil {
+			return err
+		}
+		sp.files = make([]string, 0, len(entries))
+		for _, e := range entries {
+			if !e.IsDir() {
+				sp.files = append(sp.files, sp.dir+"/"+e.Name())
+			}
 		}
 	}
 	sort.Strings(sp.files)
@@ -81,40 +98,44 @@ func (sp *soundPack) loadFiles() error {
 }
 
 type slapTracker struct {
-	mu     sync.Mutex
-	times  []time.Time
-	window time.Duration
-	pack   *soundPack
-	altIdx int
+	mu       sync.Mutex
+	score    float64
+	lastTime time.Time
+	total    int
+	halfLife float64 // seconds
+	scale    float64 // controls the escalation curve shape
+	pack     *soundPack
 }
 
 func newSlapTracker(pack *soundPack) *slapTracker {
+	halfLife := 30.0 // seconds — intensity halves every 30s of inactivity
+	// scale is derived so that the theoretical max steady-state score
+	// (at peak slap rate with 500ms cooldown) maps to approximately the
+	// second-to-last file, making the last file asymptotically unreachable.
+	ssMax := 1.0 / (1.0 - math.Pow(0.5, 0.5/halfLife))
+	scale := (ssMax - 1) / math.Log(float64(len(pack.files)))
 	return &slapTracker{
-		window: 5 * time.Minute,
-		pack:   pack,
+		halfLife: halfLife,
+		scale:   scale,
+		pack:    pack,
 	}
 }
 
-func (st *slapTracker) record(t time.Time) int {
+func (st *slapTracker) record(t time.Time) (int, float64) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
-	cutoff := t.Add(-st.window)
-	newTimes := make([]time.Time, 0, len(st.times)+1)
-	for _, tt := range st.times {
-		if tt.After(cutoff) {
-			newTimes = append(newTimes, tt)
-		}
+	if !st.lastTime.IsZero() {
+		elapsed := t.Sub(st.lastTime).Seconds()
+		st.score *= math.Pow(0.5, elapsed/st.halfLife)
 	}
-	newTimes = append(newTimes, t)
-	st.times = newTimes
-	return len(st.times)
+	st.score += 1.0
+	st.lastTime = t
+	st.total++
+	return st.total, st.score
 }
 
-func (st *slapTracker) getFile(count int) string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
+func (st *slapTracker) getFile(score float64) string {
 	if len(st.pack.files) == 0 {
 		return ""
 	}
@@ -123,25 +144,10 @@ func (st *slapTracker) getFile(count int) string {
 		return st.pack.files[rand.Intn(len(st.pack.files))]
 	}
 
-	// Escalation mode
+	// Escalation: 1-exp(-x) curve asymptotically approaches the top
+	// without ever reaching it. Slap faster to climb; slow down to decay.
 	maxIdx := len(st.pack.files) - 1
-	topTwo := maxIdx - 1
-	if topTwo < 0 {
-		topTwo = 0
-	}
-
-	var idx int
-	if count >= 20 {
-		st.altIdx = 1 - st.altIdx
-		idx = topTwo + st.altIdx
-	} else {
-		ratio := float64(count) / 20.0
-		if ratio > 1 {
-			ratio = 1
-		}
-		idx = int(ratio * float64(topTwo))
-	}
-
+	idx := int(float64(maxIdx) * (1.0 - math.Exp(-(score-1)/st.scale)))
 	if idx > maxIdx {
 		idx = maxIdx
 	}
@@ -170,6 +176,8 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 
 	cmd.Flags().BoolVarP(&sexyMode, "sexy", "s", false, "Enable sexy mode")
 	cmd.Flags().BoolVarP(&haloMode, "halo", "H", false, "Enable halo mode")
+	cmd.Flags().StringVarP(&customPath, "custom", "c", "", "Path to custom MP3 audio directory")
+	cmd.Flags().Float64Var(&minAmplitude, "min-amplitude", 0.3, "Minimum amplitude threshold (0.0-1.0, lower = more sensitive)")
 
 	if err := fang.Execute(context.Background(), cmd); err != nil {
 		os.Exit(1)
@@ -184,9 +192,18 @@ func run(ctx context.Context) error {
 	if sexyMode && haloMode {
 		return fmt.Errorf("--sexy and --halo are mutually exclusive; pick one")
 	}
+	if customPath != "" && (sexyMode || haloMode) {
+		return fmt.Errorf("--custom cannot be used with --sexy or --halo")
+	}
+
+	if minAmplitude < 0 || minAmplitude > 1 {
+		return fmt.Errorf("--min-amplitude must be between 0.0 and 1.0")
+	}
 
 	var pack *soundPack
 	switch {
+	case customPath != "":
+		pack = &soundPack{name: "custom", dir: customPath, mode: modeRandom, custom: true}
 	case sexyMode:
 		pack = &soundPack{name: "sexy", fs: sexyAudio, dir: "audio/sexy", mode: modeEscalation}
 	case haloMode:
@@ -281,12 +298,12 @@ func run(ctx context.Context) error {
 			if ev.Time != lastEventTime {
 				lastEventTime = ev.Time
 				if time.Since(lastYell) > cooldown {
-					if ev.Severity == "CHOC_MAJEUR" || ev.Severity == "CHOC_MOYEN" || ev.Severity == "MICRO_CHOC" {
+					if ev.Amplitude >= minAmplitude {
 						lastYell = now
-						count := tracker.record(now)
-						file := tracker.getFile(count)
-						fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", count, ev.Severity, ev.Amplitude, file)
-						go playEmbedded(pack.fs, file, &speakerInit)
+						num, score := tracker.record(now)
+						file := tracker.getFile(score)
+						fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", num, ev.Severity, ev.Amplitude, file)
+						go playAudio(pack, file, &speakerInit)
 					}
 				}
 			}
@@ -296,15 +313,29 @@ func run(ctx context.Context) error {
 
 var speakerMu sync.Mutex
 
-func playEmbedded(fs embed.FS, path string, speakerInit *bool) {
-	data, err := fs.ReadFile(path)
-	if err != nil {
-		return
-	}
+func playAudio(pack *soundPack, path string, speakerInit *bool) {
+	var streamer beep.StreamSeekCloser
+	var format beep.Format
 
-	streamer, format, err := mp3.Decode(io.NopCloser(bytes.NewReader(data)))
-	if err != nil {
-		return
+	if pack.custom {
+		file, err := os.Open(path)
+		if err != nil {
+			return
+		}
+		defer file.Close()
+		streamer, format, err = mp3.Decode(file)
+		if err != nil {
+			return
+		}
+	} else {
+		data, err := pack.fs.ReadFile(path)
+		if err != nil {
+			return
+		}
+		streamer, format, err = mp3.Decode(io.NopCloser(bytes.NewReader(data)))
+		if err != nil {
+			return
+		}
 	}
 	defer streamer.Close()
 
