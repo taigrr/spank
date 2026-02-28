@@ -39,8 +39,9 @@ var sexyAudio embed.FS
 var haloAudio embed.FS
 
 var (
-	sexyMode bool
-	haloMode bool
+	sexyMode     bool
+	haloMode     bool
+	minAmplitude float64
 )
 
 // sensorReady is closed once shared memory is created and the sensor
@@ -170,6 +171,7 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 
 	cmd.Flags().BoolVarP(&sexyMode, "sexy", "s", false, "Enable sexy mode")
 	cmd.Flags().BoolVarP(&haloMode, "halo", "H", false, "Enable halo mode")
+	cmd.Flags().Float64Var(&minAmplitude, "min-amplitude", 0.3, "Minimum amplitude threshold (0.0-1.0, lower = more sensitive)")
 
 	if err := fang.Execute(context.Background(), cmd); err != nil {
 		os.Exit(1)
@@ -183,6 +185,10 @@ func run(ctx context.Context) error {
 
 	if sexyMode && haloMode {
 		return fmt.Errorf("--sexy and --halo are mutually exclusive; pick one")
+	}
+
+	if minAmplitude < 0 || minAmplitude > 1 {
+		return fmt.Errorf("--min-amplitude must be between 0.0 and 1.0")
 	}
 
 	var pack *soundPack
@@ -281,7 +287,7 @@ func run(ctx context.Context) error {
 			if ev.Time != lastEventTime {
 				lastEventTime = ev.Time
 				if time.Since(lastYell) > cooldown {
-					if ev.Severity == "CHOC_MAJEUR" || ev.Severity == "CHOC_MOYEN" || ev.Severity == "MICRO_CHOC" {
+					if ev.Amplitude >= minAmplitude {
 						lastYell = now
 						count := tracker.record(now)
 						file := tracker.getFile(count)
