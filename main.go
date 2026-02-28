@@ -60,6 +60,25 @@ const (
 	modeEscalation
 )
 
+const (
+	// decayHalfLife is how many seconds of inactivity before intensity
+	// halves. Controls how fast escalation fades.
+	decayHalfLife = 30.0
+
+	// slapCooldown prevents rapid-fire audio playback.
+	slapCooldown = 500 * time.Millisecond
+
+	// sensorPollInterval is how often we check for new accelerometer data.
+	sensorPollInterval = 10 * time.Millisecond
+
+	// maxSampleBatch caps the number of accelerometer samples processed
+	// per tick to avoid falling behind.
+	maxSampleBatch = 200
+
+	// sensorStartupDelay gives the sensor time to start producing data.
+	sensorStartupDelay = 100 * time.Millisecond
+)
+
 type soundPack struct {
 	name   string
 	fs     embed.FS
@@ -76,9 +95,9 @@ func (sp *soundPack) loadFiles() error {
 			return err
 		}
 		sp.files = make([]string, 0, len(entries))
-		for _, e := range entries {
-			if !e.IsDir() {
-				sp.files = append(sp.files, sp.dir+"/"+e.Name())
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				sp.files = append(sp.files, sp.dir+"/"+entry.Name())
 			}
 		}
 	} else {
@@ -87,13 +106,16 @@ func (sp *soundPack) loadFiles() error {
 			return err
 		}
 		sp.files = make([]string, 0, len(entries))
-		for _, e := range entries {
-			if !e.IsDir() {
-				sp.files = append(sp.files, sp.dir+"/"+e.Name())
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				sp.files = append(sp.files, sp.dir+"/"+entry.Name())
 			}
 		}
 	}
 	sort.Strings(sp.files)
+	if len(sp.files) == 0 {
+		return fmt.Errorf("no audio files found in %s", sp.dir)
+	}
 	return nil
 }
 
@@ -108,38 +130,34 @@ type slapTracker struct {
 }
 
 func newSlapTracker(pack *soundPack) *slapTracker {
-	halfLife := 30.0 // seconds — intensity halves every 30s of inactivity
 	// scale is derived so that the theoretical max steady-state score
-	// (at peak slap rate with 500ms cooldown) maps to approximately the
+	// (at peak slap rate with slapCooldown) maps to approximately the
 	// second-to-last file, making the last file asymptotically unreachable.
-	ssMax := 1.0 / (1.0 - math.Pow(0.5, 0.5/halfLife))
+	cooldownSec := slapCooldown.Seconds()
+	ssMax := 1.0 / (1.0 - math.Pow(0.5, cooldownSec/decayHalfLife))
 	scale := (ssMax - 1) / math.Log(float64(len(pack.files)))
 	return &slapTracker{
-		halfLife: halfLife,
-		scale:   scale,
-		pack:    pack,
+		halfLife: decayHalfLife,
+		scale:    scale,
+		pack:     pack,
 	}
 }
 
-func (st *slapTracker) record(t time.Time) (int, float64) {
+func (st *slapTracker) record(now time.Time) (int, float64) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
 	if !st.lastTime.IsZero() {
-		elapsed := t.Sub(st.lastTime).Seconds()
+		elapsed := now.Sub(st.lastTime).Seconds()
 		st.score *= math.Pow(0.5, elapsed/st.halfLife)
 	}
 	st.score += 1.0
-	st.lastTime = t
+	st.lastTime = now
 	st.total++
 	return st.total, st.score
 }
 
 func (st *slapTracker) getFile(score float64) string {
-	if len(st.pack.files) == 0 {
-		return ""
-	}
-
 	if st.pack.mode == modeRandom {
 		return st.pack.files[rand.Intn(len(st.pack.files))]
 	}
@@ -189,11 +207,18 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("spank requires root privileges for accelerometer access, run with: sudo spank")
 	}
 
-	if sexyMode && haloMode {
-		return fmt.Errorf("--sexy and --halo are mutually exclusive; pick one")
+	modeCount := 0
+	if sexyMode {
+		modeCount++
 	}
-	if customPath != "" && (sexyMode || haloMode) {
-		return fmt.Errorf("--custom cannot be used with --sexy or --halo")
+	if haloMode {
+		modeCount++
+	}
+	if customPath != "" {
+		modeCount++
+	}
+	if modeCount > 1 {
+		return fmt.Errorf("--sexy, --halo, and --custom are mutually exclusive; pick one")
 	}
 
 	if minAmplitude < 0 || minAmplitude > 1 {
@@ -232,11 +257,10 @@ func run(ctx context.Context) error {
 	// handles internally. We launch detection on the current goroutine.
 	go func() {
 		close(sensorReady)
-		err := sensor.Run(sensor.Config{
+		if err := sensor.Run(sensor.Config{
 			AccelRing: accelRing,
 			Restarts:  0,
-		})
-		if err != nil {
+		}); err != nil {
 			sensorErr <- err
 		}
 	}()
@@ -251,20 +275,22 @@ func run(ctx context.Context) error {
 	}
 
 	// Give the sensor a moment to start producing data.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(sensorStartupDelay)
 
+	return listenForSlaps(ctx, pack, accelRing)
+}
+
+func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuffer) error {
 	tracker := newSlapTracker(pack)
 	speakerInit := false
 	det := detector.New()
 	var lastAccelTotal uint64
 	var lastEventTime time.Time
-	lastYell := time.Time{}
-	cooldown := 500 * time.Millisecond
-	maxBatch := 200
+	var lastYell time.Time
 
 	fmt.Printf("spank: listening for slaps in %s mode... (ctrl+c to quit)\n", pack.name)
 
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(sensorPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -282,32 +308,38 @@ func run(ctx context.Context) error {
 
 		samples, newTotal := accelRing.ReadNew(lastAccelTotal, shm.AccelScale)
 		lastAccelTotal = newTotal
-		if len(samples) > maxBatch {
-			samples = samples[len(samples)-maxBatch:]
+		if len(samples) > maxSampleBatch {
+			samples = samples[len(samples)-maxSampleBatch:]
 		}
 
 		nSamples := len(samples)
-		for idx, s := range samples {
+		for idx, sample := range samples {
 			tSample := tNow - float64(nSamples-idx-1)/float64(det.FS)
-			det.Process(s.X, s.Y, s.Z, tSample)
+			det.Process(sample.X, sample.Y, sample.Z, tSample)
 		}
 
-		newEventIdx := len(det.Events)
-		if newEventIdx > 0 {
-			ev := det.Events[newEventIdx-1]
-			if ev.Time != lastEventTime {
-				lastEventTime = ev.Time
-				if time.Since(lastYell) > cooldown {
-					if ev.Amplitude >= minAmplitude {
-						lastYell = now
-						num, score := tracker.record(now)
-						file := tracker.getFile(score)
-						fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", num, ev.Severity, ev.Amplitude, file)
-						go playAudio(pack, file, &speakerInit)
-					}
-				}
-			}
+		if len(det.Events) == 0 {
+			continue
 		}
+
+		ev := det.Events[len(det.Events)-1]
+		if ev.Time == lastEventTime {
+			continue
+		}
+		lastEventTime = ev.Time
+
+		if time.Since(lastYell) <= slapCooldown {
+			continue
+		}
+		if ev.Amplitude < minAmplitude {
+			continue
+		}
+
+		lastYell = now
+		num, score := tracker.record(now)
+		file := tracker.getFile(score)
+		fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", num, ev.Severity, ev.Amplitude, file)
+		go playAudio(pack, file, &speakerInit)
 	}
 }
 
@@ -320,20 +352,24 @@ func playAudio(pack *soundPack, path string, speakerInit *bool) {
 	if pack.custom {
 		file, err := os.Open(path)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "spank: open %s: %v\n", path, err)
 			return
 		}
 		defer file.Close()
 		streamer, format, err = mp3.Decode(file)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "spank: decode %s: %v\n", path, err)
 			return
 		}
 	} else {
 		data, err := pack.fs.ReadFile(path)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "spank: read %s: %v\n", path, err)
 			return
 		}
 		streamer, format, err = mp3.Decode(io.NopCloser(bytes.NewReader(data)))
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "spank: decode %s: %v\n", path, err)
 			return
 		}
 	}
