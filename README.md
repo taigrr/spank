@@ -12,8 +12,10 @@ Uses the Apple Silicon accelerometer (Bosch BMI286 IMU via IOKit HID) to detect 
 
 ## Requirements
 
-- macOS on Apple Silicon (M2+)
-- `sudo` (for IOKit HID accelerometer access)
+- macOS on Apple Silicon
+  - **M2+**: Full accelerometer mode (default)
+  - **M1**: Use `--mic` flag (microphone-based detection)
+- `sudo` (for IOKit HID accelerometer access in default mode)
 
 ## Install
 
@@ -40,6 +42,11 @@ sudo spank --halo
 # Custom mode — plays your own MP3 files from a directory
 sudo spank --custom /path/to/mp3s
 
+# Mic mode — use microphone instead of accelerometer (works on M1!)
+sudo spank --mic
+sudo spank --mic --sexy
+sudo spank --mic --halo
+
 # Adjust sensitivity with amplitude threshold (lower = more sensitive)
 sudo spank --min-amplitude 0.1   # more sensitive
 sudo spank --min-amplitude 0.25  # less sensitive
@@ -64,7 +71,19 @@ Control detection sensitivity with `--min-amplitude` (default: 0.3):
 - Medium values (e.g., 0.15-0.30): Balanced sensitivity
 - Higher values (e.g., 0.30-0.50): Only strong impacts trigger sounds
 
-The value represents the minimum acceleration amplitude (in g-force) required to trigger a sound.
+The value represents the minimum acceleration amplitude (in g-force) or audio amplitude required to trigger a sound.
+
+### M1 Macs
+
+M1 MacBooks lack the Bosch BMI286 accelerometer found in M2+ models. Use the `--mic` flag to detect slaps via the built-in microphone instead:
+
+```bash
+sudo spank --mic
+```
+
+Mic mode detects sudden loud sounds (slaps, impacts) using audio analysis. It works with all audio modes (`--sexy`, `--halo`, `--custom`) and sensitivity tuning (`--min-amplitude`).
+
+> **Note:** If you run `spank` without `--mic` on an M1, it will print a helpful error message suggesting the `--mic` flag.
 
 ## Running as a Service
 
@@ -183,10 +202,19 @@ sudo launchctl unload /Library/LaunchDaemons/com.taigrr.spank.plist
 
 ## How it works
 
+### Accelerometer mode (default, M2+)
+
 1. Reads raw accelerometer data directly via IOKit HID (Apple SPU sensor)
 2. Runs vibration detection (STA/LTA, CUSUM, kurtosis, peak/MAD)
 3. When a significant impact is detected, plays an embedded MP3 response
 4. 750ms cooldown between responses to prevent rapid-fire
+
+### Mic mode (`--mic`, M1+)
+
+1. Captures audio from the built-in microphone via Core Audio (AudioQueue)
+2. Runs STA/LTA ratio analysis on RMS energy of each audio frame
+3. When a sudden loud sound is detected, plays an embedded MP3 response
+4. Same 750ms cooldown and amplitude thresholding as accelerometer mode
 
 ## Star History
 

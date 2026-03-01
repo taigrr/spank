@@ -40,10 +40,12 @@ var sexyAudio embed.FS
 var haloAudio embed.FS
 
 var (
-	sexyMode     bool
-	haloMode     bool
-	customPath   string
-	minAmplitude float64
+	sexyMode        bool
+	haloMode        bool
+	customPath      string
+	minAmplitude    float64
+	micMode         bool
+	minAmplitudeSet bool // true if user explicitly passed --min-amplitude
 )
 
 // sensorReady is closed once shared memory is created and the sensor
@@ -189,6 +191,7 @@ within a minute, the more intense the sounds become.
 Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 		Version: version,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			minAmplitudeSet = cmd.Flags().Changed("min-amplitude")
 			return run(cmd.Context())
 		},
 		SilenceUsage: true,
@@ -198,6 +201,7 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 	cmd.Flags().BoolVarP(&haloMode, "halo", "H", false, "Enable halo mode")
 	cmd.Flags().StringVarP(&customPath, "custom", "c", "", "Path to custom MP3 audio directory")
 	cmd.Flags().Float64Var(&minAmplitude, "min-amplitude", 0.3, "Minimum amplitude threshold (0.0-1.0, lower = more sensitive)")
+	cmd.Flags().BoolVarP(&micMode, "mic", "m", false, "Use microphone for impact detection (works on M1+ Macs)")
 
 	if err := fang.Execute(context.Background(), cmd); err != nil {
 		os.Exit(1)
@@ -246,9 +250,21 @@ func run(ctx context.Context) error {
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Microphone mode: skip accelerometer entirely.
+	if micMode {
+		// Mic mode needs much lower min-amplitude since laptop slaps
+		// produce quiet thuds. Use 0.05 unless user explicitly set it.
+		if !minAmplitudeSet {
+			minAmplitude = 0.05
+		}
+		return runMicMode(ctx, pack)
+	}
+
 	// Create shared memory for accelerometer data.
 	accelRing, err := shm.CreateRing(shm.NameAccel)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "spank: failed to create accel shm: %v\n", err)
+		fmt.Fprintf(os.Stderr, "spank: tip: if you're on an M1 Mac, try: sudo spank --mic\n")
 		return fmt.Errorf("creating accel shm: %w", err)
 	}
 	defer accelRing.Close()
@@ -271,6 +287,7 @@ func run(ctx context.Context) error {
 	select {
 	case <-sensorReady:
 	case err := <-sensorErr:
+		fmt.Fprintf(os.Stderr, "spank: tip: if you're on an M1 Mac, try: sudo spank --mic\n")
 		return fmt.Errorf("sensor worker failed: %w", err)
 	case <-ctx.Done():
 		return nil
@@ -389,4 +406,76 @@ func playAudio(pack *soundPack, path string, speakerInit *bool) {
 		done <- true
 	})))
 	<-done
+}
+
+// runMicMode starts microphone-based impact detection.
+func runMicMode(ctx context.Context, pack *soundPack) error {
+	mic, err := NewMicCapture()
+	if err != nil {
+		return fmt.Errorf("mic mode: %w", err)
+	}
+	defer mic.Close()
+
+	// Small delay for mic to start producing data.
+	time.Sleep(200 * time.Millisecond)
+
+	return listenForSlapsFromMic(ctx, pack, mic)
+}
+
+// listenForSlapsFromMic polls the microphone and uses audio-based impact
+// detection, feeding events into the same slapTracker/playAudio pipeline.
+func listenForSlapsFromMic(ctx context.Context, pack *soundPack, mic *MicCapture) error {
+	tracker := newSlapTracker(pack)
+	speakerInit := false
+	micDet := NewMicDetector()
+	var lastYell time.Time
+
+	fmt.Printf("spank: listening for slaps in %s mode (mic)... (ctrl+c to quit)\n", pack.name)
+
+	ticker := time.NewTicker(sensorPollInterval)
+	defer ticker.Stop()
+
+	// Accumulate samples into frames
+	frameBuf := make([]float32, 0, micFrameSize)
+
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("\nbye!")
+			return nil
+		case <-ticker.C:
+		}
+
+		samples := mic.ReadNew()
+		if len(samples) == 0 {
+			continue
+		}
+
+		frameBuf = append(frameBuf, samples...)
+
+		// Process complete frames
+		for len(frameBuf) >= micFrameSize {
+			frame := frameBuf[:micFrameSize]
+			frameBuf = frameBuf[micFrameSize:]
+
+			ev := micDet.ProcessFrame(frame)
+			if ev == nil {
+				continue
+			}
+
+			now := time.Now()
+			if now.Sub(lastYell) <= slapCooldown {
+				continue
+			}
+			if ev.Amplitude < minAmplitude {
+				continue
+			}
+
+			lastYell = now
+			num, score := tracker.record(now)
+			file := tracker.getFile(score)
+			fmt.Printf("slap #%d [%s amp=%.5f] -> %s\n", num, ev.Severity, ev.Amplitude, file)
+			go playAudio(pack, file, &speakerInit)
+		}
+	}
 }
