@@ -37,6 +37,10 @@ sudo spank --sexy
 # Halo mode — plays Halo death sounds when slapped
 sudo spank --halo
 
+# Fast mode — faster polling and shorter cooldown
+sudo spank --fast
+sudo spank --sexy --fast
+
 # Custom mode — plays your own MP3 files from a directory
 sudo spank --custom /path/to/mp3s
 
@@ -56,9 +60,15 @@ sudo spank --sexy --min-amplitude 0.2
 
 **Custom mode** (`--custom`): Randomly plays MP3 files from a custom directory you specify.
 
+### Detection tuning
+
+Use `--fast` for a more responsive profile with faster polling, shorter cooldown, and higher sensitivity.
+
+You can still override individual values with `--min-amplitude` and `--cooldown` when needed.
+
 ### Sensitivity
 
-Control detection sensitivity with `--min-amplitude` (default: 0.3):
+Control detection sensitivity with `--min-amplitude` (default: `0.3`):
 
 - Lower values (e.g., 0.05-0.10): Very sensitive, detects light taps
 - Medium values (e.g., 0.15-0.30): Balanced sensitivity
