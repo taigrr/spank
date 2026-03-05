@@ -42,6 +42,9 @@ sudo spank --sexy
 # Halo mode — plays Halo death sounds when slapped
 sudo spank --halo
 
+# Rage mode — escalating pain sounds + live arcade HUD
+sudo spank --rage
+
 # Fast mode — faster polling and shorter cooldown
 sudo spank --fast
 sudo spank --sexy --fast
@@ -66,6 +69,8 @@ sudo spank --cooldown 600
 
 **Halo mode** (`--halo`): Randomly plays from death sound effects from the Halo video game series when a slap is detected.
 
+**Rage mode** (`--rage`): Arcade-style mode with escalating intensity using pain clips plus a live rage/combo HUD.
+
 **Custom mode** (`--custom`): Randomly plays MP3 files from a custom directory you specify.
 
 ### Detection tuning
@@ -83,6 +88,16 @@ Control detection sensitivity with `--min-amplitude` (default: `0.05`):
 - Higher values (e.g., 0.30-0.50): Only strong impacts trigger sounds
 
 The value represents the minimum acceleration amplitude (in g-force) required to trigger a sound.
+
+### Rage mode HUD
+
+In `--rage` mode, `spank` shows a live terminal HUD with:
+
+- Arcade-style realtime score (`001`-`999`)
+- Rage bar (%), based on recent slap frequency with time decay
+- Current combo streak (`xN`) where hits within 2s chain together
+- Cooldown timer before the next sound can trigger
+- Total detected slaps this session
 
 ## Running as a Service
 
@@ -167,6 +182,38 @@ sudo tee /Library/LaunchDaemons/com.taigrr.spank.plist > /dev/null << 'EOF'
     <array>
         <string>/usr/local/bin/spank</string>
         <string>--halo</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/spank.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/spank.err</string>
+</dict>
+</plist>
+EOF
+```
+
+</details>
+
+<details>
+<summary>Rage mode</summary>
+
+```bash
+sudo tee /Library/LaunchDaemons/com.taigrr.spank.plist > /dev/null << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.taigrr.spank</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/spank</string>
+        <string>--rage</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

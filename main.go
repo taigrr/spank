@@ -15,7 +15,6 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -29,6 +28,9 @@ import (
 	"github.com/taigrr/apple-silicon-accelerometer/detector"
 	"github.com/taigrr/apple-silicon-accelerometer/sensor"
 	"github.com/taigrr/apple-silicon-accelerometer/shm"
+	"github.com/taigrr/spank/internal/modepack"
+	"github.com/taigrr/spank/internal/modes"
+	"github.com/taigrr/spank/internal/score"
 )
 
 var version = "dev"
@@ -45,6 +47,7 @@ var haloAudio embed.FS
 var (
 	sexyMode     bool
 	haloMode     bool
+	rageMode     bool
 	customPath   string
 	customFiles  []string
 	fastMode     bool
@@ -61,13 +64,6 @@ var sensorReady = make(chan struct{})
 
 // sensorErr receives any error from the sensor worker.
 var sensorErr = make(chan error, 1)
-
-type playMode int
-
-const (
-	modeRandom playMode = iota
-	modeEscalation
-)
 
 const (
 	// decayHalfLife is how many seconds of inactivity before intensity
@@ -89,6 +85,15 @@ const (
 
 	// sensorStartupDelay gives the sensor time to start producing data.
 	sensorStartupDelay = 100 * time.Millisecond
+
+	// rageMeterRefreshInterval controls how often the terminal HUD updates.
+	rageMeterRefreshInterval = 100 * time.Millisecond
+
+	// comboWindow is the max gap between slaps to continue a combo.
+	comboWindow = 2 * time.Second
+
+	// rageBarWidth controls the visual width of the rage bar.
+	rageBarWidth = 24
 )
 
 type runtimeTuning struct {
@@ -119,46 +124,6 @@ func applyFastOverlay(base runtimeTuning) runtimeTuning {
 	return base
 }
 
-type soundPack struct {
-	name   string
-	fs     embed.FS
-	dir    string
-	mode   playMode
-	files  []string
-	custom bool
-}
-
-func (sp *soundPack) loadFiles() error {
-	if sp.custom {
-		entries, err := os.ReadDir(sp.dir)
-		if err != nil {
-			return err
-		}
-		sp.files = make([]string, 0, len(entries))
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				sp.files = append(sp.files, sp.dir+"/"+entry.Name())
-			}
-		}
-	} else {
-		entries, err := sp.fs.ReadDir(sp.dir)
-		if err != nil {
-			return err
-		}
-		sp.files = make([]string, 0, len(entries))
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				sp.files = append(sp.files, sp.dir+"/"+entry.Name())
-			}
-		}
-	}
-	sort.Strings(sp.files)
-	if len(sp.files) == 0 {
-		return fmt.Errorf("no audio files found in %s", sp.dir)
-	}
-	return nil
-}
-
 type slapTracker struct {
 	mu       sync.Mutex
 	score    float64
@@ -166,17 +131,17 @@ type slapTracker struct {
 	total    int
 	halfLife float64 // seconds
 	scale    float64 // controls the escalation curve shape
-	pack     *soundPack
+	pack     *modepack.Pack
 }
 
-func newSlapTracker(pack *soundPack, cooldown time.Duration) *slapTracker {
+func newSlapTracker(pack *modepack.Pack, cooldown time.Duration) *slapTracker {
 	// scale maps the exponential curve so that sustained max-rate
 	// slapping (one per cooldown) reaches the final file. At steady
 	// state the score converges to ssMax; we set scale so that score
 	// maps to the last index.
 	cooldownSec := cooldown.Seconds()
 	ssMax := 1.0 / (1.0 - math.Pow(0.5, cooldownSec/decayHalfLife))
-	scale := (ssMax - 1) / math.Log(float64(len(pack.files)+1))
+	scale := (ssMax - 1) / math.Log(float64(len(pack.Files)+1))
 	return &slapTracker{
 		halfLife: decayHalfLife,
 		scale:    scale,
@@ -199,19 +164,74 @@ func (st *slapTracker) record(now time.Time) (int, float64) {
 }
 
 func (st *slapTracker) getFile(score float64) string {
-	if st.pack.mode == modeRandom {
-		return st.pack.files[rand.Intn(len(st.pack.files))]
+	if st.pack.Mode == modepack.ModeRandom {
+		return st.pack.Files[rand.Intn(len(st.pack.Files))]
 	}
 
 	// Escalation: 1-exp(-x) curve maps score to file index.
 	// At sustained max slap rate, score reaches ssMax which maps
 	// to the final file.
-	maxIdx := len(st.pack.files) - 1
-	idx := int(float64(len(st.pack.files)) * (1.0 - math.Exp(-(score-1)/st.scale)))
+	maxIdx := len(st.pack.Files) - 1
+	idx := int(float64(len(st.pack.Files)) * (1.0 - math.Exp(-(score-1)/st.scale)))
 	if idx > maxIdx {
 		idx = maxIdx
 	}
-	return st.pack.files[idx]
+	return st.pack.Files[idx]
+}
+
+func (st *slapTracker) scoreAt(now time.Time) float64 {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	score := st.score
+	if !st.lastTime.IsZero() {
+		elapsed := now.Sub(st.lastTime).Seconds()
+		score *= math.Pow(0.5, elapsed/st.halfLife)
+	}
+	return score
+}
+
+func (st *slapTracker) ragePercent(now time.Time) int {
+	if st.scale <= 0 {
+		return 0
+	}
+	score := st.scoreAt(now)
+	rage := 1.0 - math.Exp(-score/st.scale)
+	if rage < 0 {
+		rage = 0
+	}
+	if rage > 1 {
+		rage = 1
+	}
+	return int(math.Round(rage * 100))
+}
+
+func (st *slapTracker) totalSlaps() int {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.total
+}
+
+func renderRageMeter(ragePct int, combo int, arcadeScore int, cooldownRemaining time.Duration, totalSlaps int) {
+	if ragePct < 0 {
+		ragePct = 0
+	}
+	if ragePct > 100 {
+		ragePct = 100
+	}
+	filled := int(math.Round(float64(ragePct) / 100 * float64(rageBarWidth)))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > rageBarWidth {
+		filled = rageBarWidth
+	}
+	bar := strings.Repeat("#", filled) + strings.Repeat("-", rageBarWidth-filled)
+	cooldownSec := cooldownRemaining.Seconds()
+	if cooldownSec < 0 {
+		cooldownSec = 0
+	}
+	fmt.Printf("\rSCORE %03d | RAGE [%s] %3d%% | combo x%-2d | cd %.2fs | slaps %d\x1b[K", arcadeScore, bar, ragePct, combo, cooldownSec, totalSlaps)
 }
 
 func main() {
@@ -226,7 +246,10 @@ Requires sudo (for IOKit HID access to the accelerometer).
 Use --sexy for a different experience. In sexy mode, the more you slap
 within a minute, the more intense the sounds become.
 
-Use --halo to play random audio clips from Halo soundtracks on each slap.`,
+Use --halo to play random audio clips from Halo soundtracks on each slap.
+
+Use --rage for an arcade-style rage mode with escalating pain sounds
+and a live rage/combo meter.`,
 		Version: version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tuning := defaultTuning()
@@ -247,6 +270,7 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 
 	cmd.Flags().BoolVarP(&sexyMode, "sexy", "s", false, "Enable sexy mode")
 	cmd.Flags().BoolVarP(&haloMode, "halo", "H", false, "Enable halo mode")
+	cmd.Flags().BoolVarP(&rageMode, "rage", "r", false, "Enable rage mode")
 	cmd.Flags().StringVarP(&customPath, "custom", "c", "", "Path to custom MP3 audio directory")
 	cmd.Flags().BoolVar(&fastMode, "fast", false, "Enable faster detection tuning (shorter cooldown, higher sensitivity)")
 	cmd.Flags().StringSliceVar(&customFiles, "custom-files", nil, "Comma-separated list of custom MP3 files")
@@ -264,20 +288,6 @@ func run(ctx context.Context, tuning runtimeTuning) error {
 		return fmt.Errorf("spank requires root privileges for accelerometer access, run with: sudo spank")
 	}
 
-	modeCount := 0
-	if sexyMode {
-		modeCount++
-	}
-	if haloMode {
-		modeCount++
-	}
-	if customPath != "" || len(customFiles) > 0 {
-		modeCount++
-	}
-	if modeCount > 1 {
-		return fmt.Errorf("--sexy, --halo, and --custom/--custom-files are mutually exclusive; pick one")
-	}
-
 	if tuning.minAmplitude < 0 || tuning.minAmplitude > 1 {
 		return fmt.Errorf("--min-amplitude must be between 0.0 and 1.0")
 	}
@@ -285,34 +295,24 @@ func run(ctx context.Context, tuning runtimeTuning) error {
 		return fmt.Errorf("--cooldown must be greater than 0")
 	}
 
-	var pack *soundPack
-	switch {
-	case len(customFiles) > 0:
-		// Validate all files exist and are MP3s
-		for _, f := range customFiles {
-			if !strings.HasSuffix(strings.ToLower(f), ".mp3") {
-				return fmt.Errorf("custom file must be MP3: %s", f)
-			}
-			if _, err := os.Stat(f); err != nil {
-				return fmt.Errorf("custom file not found: %s", f)
-			}
-		}
-		pack = &soundPack{name: "custom", mode: modeRandom, custom: true, files: customFiles}
-	case customPath != "":
-		pack = &soundPack{name: "custom", dir: customPath, mode: modeRandom, custom: true}
-	case sexyMode:
-		pack = &soundPack{name: "sexy", fs: sexyAudio, dir: "audio/sexy", mode: modeEscalation}
-	case haloMode:
-		pack = &soundPack{name: "halo", fs: haloAudio, dir: "audio/halo", mode: modeRandom}
-	default:
-		pack = &soundPack{name: "pain", fs: painAudio, dir: "audio/pain", mode: modeRandom}
+	pack, err := modes.Resolve(
+		modes.Selection{
+			Sexy:        sexyMode,
+			Halo:        haloMode,
+			Rage:        rageMode,
+			CustomPath:  customPath,
+			CustomFiles: customFiles,
+		},
+		painAudio,
+		sexyAudio,
+		haloAudio,
+	)
+	if err != nil {
+		return err
 	}
 
-	// Only load files if not already set (customFiles case)
-	if len(pack.files) == 0 {
-		if err := pack.loadFiles(); err != nil {
-			return fmt.Errorf("loading %s audio: %w", pack.name, err)
-		}
+	if err := pack.LoadFiles(); err != nil {
+		return fmt.Errorf("loading %s audio: %w", pack.Name, err)
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -354,13 +354,17 @@ func run(ctx context.Context, tuning runtimeTuning) error {
 	return listenForSlaps(ctx, pack, accelRing, tuning)
 }
 
-func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuffer, tuning runtimeTuning) error {
+func listenForSlaps(ctx context.Context, pack *modepack.Pack, accelRing *shm.RingBuffer, tuning runtimeTuning) error {
 	tracker := newSlapTracker(pack, tuning.cooldown)
 	speakerInit := false
 	det := detector.New()
 	var lastAccelTotal uint64
 	var lastEventTime time.Time
 	var lastYell time.Time
+	var lastSlapTime time.Time
+	combo := 0
+	nextRageHUD := time.Now()
+	showRageMeter := pack.ShowRageMeter && !stdioMode
 
 	// Start stdin command reader if in JSON mode
 	if stdioMode {
@@ -371,7 +375,7 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 	if fastMode {
 		presetLabel = "fast"
 	}
-	fmt.Printf("spank: listening for slaps in %s mode with %s tuning... (ctrl+c to quit)\n", pack.name, presetLabel)
+	fmt.Printf("spank: listening for slaps in %s mode with %s tuning... (ctrl+c to quit)\n", pack.Name, presetLabel)
 	if stdioMode {
 		fmt.Println(`{"status":"ready"}`)
 	}
@@ -379,9 +383,30 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 	ticker := time.NewTicker(tuning.pollInterval)
 	defer ticker.Stop()
 
+	renderHUD := func(now time.Time) {
+		if !showRageMeter || now.Before(nextRageHUD) {
+			return
+		}
+		comboNow := combo
+		if !lastSlapTime.IsZero() && now.Sub(lastSlapTime) > comboWindow {
+			comboNow = 0
+		}
+		cooldownRemaining := tuning.cooldown - now.Sub(lastYell)
+		if cooldownRemaining < 0 {
+			cooldownRemaining = 0
+		}
+		ragePct := tracker.ragePercent(now)
+		arcade := score.Arcade(ragePct, comboNow)
+		renderRageMeter(ragePct, comboNow, arcade, cooldownRemaining, tracker.totalSlaps())
+		nextRageHUD = now.Add(rageMeterRefreshInterval)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
+			if showRageMeter {
+				fmt.Print("\r\x1b[K")
+			}
 			fmt.Println("\nbye!")
 			return nil
 		case err := <-sensorErr:
@@ -413,25 +438,35 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 		}
 
 		if len(det.Events) == 0 {
+			renderHUD(now)
 			continue
 		}
 
 		ev := det.Events[len(det.Events)-1]
 		if ev.Time == lastEventTime {
+			renderHUD(now)
 			continue
 		}
 		lastEventTime = ev.Time
 
 		if time.Since(lastYell) <= tuning.cooldown {
+			renderHUD(now)
 			continue
 		}
 		if ev.Amplitude < tuning.minAmplitude {
+			renderHUD(now)
 			continue
 		}
 
 		lastYell = now
-		num, score := tracker.record(now)
-		file := tracker.getFile(score)
+		if !lastSlapTime.IsZero() && now.Sub(lastSlapTime) <= comboWindow {
+			combo++
+		} else {
+			combo = 1
+		}
+		lastSlapTime = now
+		num, intensity := tracker.record(now)
+		file := tracker.getFile(intensity)
 		if stdioMode {
 			event := map[string]interface{}{
 				"timestamp":  now.Format(time.RFC3339Nano),
@@ -444,19 +479,23 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 				fmt.Println(string(data))
 			}
 		} else {
+			if showRageMeter {
+				fmt.Print("\r\x1b[K")
+			}
 			fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", num, ev.Severity, ev.Amplitude, file)
 		}
 		go playAudio(pack, file, &speakerInit)
+		renderHUD(now)
 	}
 }
 
 var speakerMu sync.Mutex
 
-func playAudio(pack *soundPack, path string, speakerInit *bool) {
+func playAudio(pack *modepack.Pack, path string, speakerInit *bool) {
 	var streamer beep.StreamSeekCloser
 	var format beep.Format
 
-	if pack.custom {
+	if pack.Custom {
 		file, err := os.Open(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "spank: open %s: %v\n", path, err)
@@ -469,7 +508,7 @@ func playAudio(pack *soundPack, path string, speakerInit *bool) {
 			return
 		}
 	} else {
-		data, err := pack.fs.ReadFile(path)
+		data, err := pack.ReadFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "spank: read %s: %v\n", path, err)
 			return
