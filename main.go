@@ -4,9 +4,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -14,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -44,8 +47,12 @@ var (
 	haloMode     bool
 	customPath   string
 	fastMode     bool
+	customFiles  []string
 	minAmplitude float64
 	cooldownMs   int
+	stdioMode    bool
+	paused       bool
+	pausedMu     sync.RWMutex
 )
 
 // sensorReady is closed once shared memory is created and the sensor
@@ -232,7 +239,10 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 	cmd.Flags().StringVarP(&customPath, "custom", "c", "", "Path to custom MP3 audio directory")
 	cmd.Flags().BoolVar(&fastMode, "fast", false, "Enable faster detection tuning")
 	cmd.Flags().Float64Var(&minAmplitude, "min-amplitude", defaultMinAmplitude, "Minimum amplitude threshold (0.0-1.0, lower = more sensitive)")
+	cmd.Flags().StringSliceVar(&customFiles, "custom-files", nil, "Comma-separated list of custom MP3 files")
+	cmd.Flags().Float64Var(&minAmplitude, "min-amplitude", 0.05, "Minimum amplitude threshold (0.0-1.0, lower = more sensitive)")
 	cmd.Flags().IntVar(&cooldownMs, "cooldown", defaultCooldownMs, "Cooldown between responses in milliseconds")
+	cmd.Flags().BoolVar(&stdioMode, "stdio", false, "Enable stdio mode: JSON output and stdin commands (for GUI integration)")
 
 	if err := fang.Execute(context.Background(), cmd); err != nil {
 		os.Exit(1)
@@ -251,11 +261,11 @@ func run(ctx context.Context, cmd *cobra.Command) error {
 	if haloMode {
 		modeCount++
 	}
-	if customPath != "" {
+	if customPath != "" || len(customFiles) > 0 {
 		modeCount++
 	}
 	if modeCount > 1 {
-		return fmt.Errorf("--sexy, --halo, and --custom are mutually exclusive; pick one")
+		return fmt.Errorf("--sexy, --halo, and --custom/--custom-files are mutually exclusive; pick one")
 	}
 
 	tuning := defaultTuning()
@@ -279,6 +289,17 @@ func run(ctx context.Context, cmd *cobra.Command) error {
 
 	var pack *soundPack
 	switch {
+	case len(customFiles) > 0:
+		// Validate all files exist and are MP3s
+		for _, f := range customFiles {
+			if !strings.HasSuffix(strings.ToLower(f), ".mp3") {
+				return fmt.Errorf("custom file must be MP3: %s", f)
+			}
+			if _, err := os.Stat(f); err != nil {
+				return fmt.Errorf("custom file not found: %s", f)
+			}
+		}
+		pack = &soundPack{name: "custom", mode: modeRandom, custom: true, files: customFiles}
 	case customPath != "":
 		pack = &soundPack{name: "custom", dir: customPath, mode: modeRandom, custom: true}
 	case sexyMode:
@@ -289,8 +310,11 @@ func run(ctx context.Context, cmd *cobra.Command) error {
 		pack = &soundPack{name: "pain", fs: painAudio, dir: "audio/pain", mode: modeRandom}
 	}
 
-	if err := pack.loadFiles(); err != nil {
-		return fmt.Errorf("loading %s audio: %w", pack.name, err)
+	// Only load files if not already set (customFiles case)
+	if len(pack.files) == 0 {
+		if err := pack.loadFiles(); err != nil {
+			return fmt.Errorf("loading %s audio: %w", pack.name, err)
+		}
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -346,6 +370,15 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 	var lastYell time.Time
 
 	fmt.Printf("spank: listening for slaps in %s mode with %s tuning... (ctrl+c to quit)\n", pack.name, presetLabel)
+	// Start stdin command reader if in JSON mode
+	if stdioMode {
+		go readStdinCommands()
+	}
+
+	fmt.Printf("spank: listening for slaps in %s mode... (ctrl+c to quit)\n", pack.name)
+	if stdioMode {
+		fmt.Println(`{"status":"ready"}`)
+	}
 
 	ticker := time.NewTicker(tuning.pollInterval)
 	defer ticker.Stop()
@@ -358,6 +391,14 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 		case err := <-sensorErr:
 			return fmt.Errorf("sensor worker failed: %w", err)
 		case <-ticker.C:
+		}
+
+		// Check if paused
+		pausedMu.RLock()
+		isPaused := paused
+		pausedMu.RUnlock()
+		if isPaused {
+			continue
 		}
 
 		now := time.Now()
@@ -395,7 +436,20 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 		lastYell = now
 		num, score := tracker.record(now)
 		file := tracker.getFile(score)
-		fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", num, ev.Severity, ev.Amplitude, file)
+		if stdioMode {
+			event := map[string]interface{}{
+				"timestamp":  now.Format(time.RFC3339Nano),
+				"slapNumber": num,
+				"amplitude":  ev.Amplitude,
+				"severity":   string(ev.Severity),
+				"file":       file,
+			}
+			if data, err := json.Marshal(event); err == nil {
+				fmt.Println(string(data))
+			}
+		} else {
+			fmt.Printf("slap #%d [%s amp=%.5fg] -> %s\n", num, ev.Severity, ev.Amplitude, file)
+		}
 		go playAudio(pack, file, &speakerInit)
 	}
 }
@@ -444,4 +498,74 @@ func playAudio(pack *soundPack, path string, speakerInit *bool) {
 		done <- true
 	})))
 	<-done
+}
+
+// stdinCommand represents a command received via stdin
+type stdinCommand struct {
+	Cmd       string  `json:"cmd"`
+	Amplitude float64 `json:"amplitude,omitempty"`
+	Cooldown  int     `json:"cooldown,omitempty"`
+}
+
+// readStdinCommands reads JSON commands from stdin for live control
+func readStdinCommands() {
+	processCommands(os.Stdin, os.Stdout)
+}
+
+// processCommands reads JSON commands from r and writes responses to w.
+// This is the testable core of the stdin command handler.
+func processCommands(r io.Reader, w io.Writer) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var cmd stdinCommand
+		if err := json.Unmarshal([]byte(line), &cmd); err != nil {
+			if stdioMode {
+				fmt.Fprintf(w, `{"error":"invalid command: %s"}%s`, err.Error(), "\n")
+			}
+			continue
+		}
+
+		switch cmd.Cmd {
+		case "pause":
+			pausedMu.Lock()
+			paused = true
+			pausedMu.Unlock()
+			if stdioMode {
+				fmt.Fprintln(w, `{"status":"paused"}`)
+			}
+		case "resume":
+			pausedMu.Lock()
+			paused = false
+			pausedMu.Unlock()
+			if stdioMode {
+				fmt.Fprintln(w, `{"status":"resumed"}`)
+			}
+		case "set":
+			if cmd.Amplitude > 0 && cmd.Amplitude <= 1 {
+				minAmplitude = cmd.Amplitude
+			}
+			if cmd.Cooldown > 0 {
+				cooldownMs = cmd.Cooldown
+			}
+			if stdioMode {
+				fmt.Fprintf(w, `{"status":"settings_updated","amplitude":%.4f,"cooldown":%d}%s`, minAmplitude, cooldownMs, "\n")
+			}
+		case "status":
+			pausedMu.RLock()
+			isPaused := paused
+			pausedMu.RUnlock()
+			if stdioMode {
+				fmt.Fprintf(w, `{"status":"ok","paused":%t,"amplitude":%.4f,"cooldown":%d}%s`, isPaused, minAmplitude, cooldownMs, "\n")
+			}
+		default:
+			if stdioMode {
+				fmt.Fprintf(w, `{"error":"unknown command: %s"}%s`, cmd.Cmd, "\n")
+			}
+		}
+	}
 }
