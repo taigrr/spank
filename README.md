@@ -37,6 +37,9 @@ sudo spank --sexy
 # Halo mode — plays Halo death sounds when slapped
 sudo spank --halo
 
+# Laugh mode — plays laugh sound effects when slapped
+sudo spank --laugh
+
 # Custom mode — plays your own MP3 files from a directory
 sudo spank --custom /path/to/mp3s
 
@@ -53,6 +56,8 @@ sudo spank --sexy --min-amplitude 0.2
 **Sexy mode** (`--sexy`): Tracks slaps within a rolling 5-minute window. The more you slap, the more intense the audio response. 60 levels of escalation.
 
 **Halo mode** (`--halo`): Randomly plays from death sound effects from the Halo video game series when a slap is detected.
+
+**Laugh mode** (`--laugh`): Randomly plays from laugh audio clips when a slap is detected.
 
 **Custom mode** (`--custom`): Randomly plays MP3 files from a custom directory you specify.
 
@@ -164,6 +169,35 @@ EOF
 ```
 
 </details>
+
+<details>
+<summary>Laugh mode</summary>
+
+```bash
+sudo tee /Library/LaunchDaemons/com.taigrr.spank.plist > /dev/null << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "[http://www.apple.com/DTDs/PropertyList-1.0.dtd](http://www.apple.com/DTDs/PropertyList-1.0.dtd)">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.taigrr.spank</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/spank</string>
+        <string>--laugh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/spank.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/spank.err</string>
+</dict>
+</plist>
+EOF
 
 > **Note:** Update the path to `spank` if you installed it elsewhere (e.g. `~/go/bin/spank`).
 

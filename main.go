@@ -39,9 +39,13 @@ var sexyAudio embed.FS
 //go:embed audio/halo/*.mp3
 var haloAudio embed.FS
 
+//go:embed audio/laugh/*.mp3
+var laughAudio embed.FS
+
 var (
 	sexyMode     bool
 	haloMode     bool
+	laughMode    bool
 	customPath   string
 	minAmplitude float64
 	cooldownMs   int
@@ -187,6 +191,8 @@ Requires sudo (for IOKit HID access to the accelerometer).
 Use --sexy for a different experience. In sexy mode, the more you slap
 within a minute, the more intense the sounds become.
 
+Use --laugh to play random laugh audio sounds on each slap.
+
 Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 		Version: version,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -197,6 +203,7 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 
 	cmd.Flags().BoolVarP(&sexyMode, "sexy", "s", false, "Enable sexy mode")
 	cmd.Flags().BoolVarP(&haloMode, "halo", "H", false, "Enable halo mode")
+	cmd.Flags().BoolVarP(&laughMode, "laugh", "l", false, "Enable laugh mode")
 	cmd.Flags().StringVarP(&customPath, "custom", "c", "", "Path to custom MP3 audio directory")
 	cmd.Flags().Float64Var(&minAmplitude, "min-amplitude", 0.3, "Minimum amplitude threshold (0.0-1.0, lower = more sensitive)")
 	cmd.Flags().IntVar(&cooldownMs, "cooldown", defaultCooldownMs, "Cooldown between responses in milliseconds")
@@ -218,11 +225,14 @@ func run(ctx context.Context) error {
 	if haloMode {
 		modeCount++
 	}
+	if laughMode {
+		modeCount++
+	}
 	if customPath != "" {
 		modeCount++
 	}
 	if modeCount > 1 {
-		return fmt.Errorf("--sexy, --halo, and --custom are mutually exclusive; pick one")
+		return fmt.Errorf("--sexy, --halo, --laugh, and --custom are mutually exclusive; pick one")
 	}
 
 	if minAmplitude < 0 || minAmplitude > 1 {
@@ -237,6 +247,8 @@ func run(ctx context.Context) error {
 		pack = &soundPack{name: "sexy", fs: sexyAudio, dir: "audio/sexy", mode: modeEscalation}
 	case haloMode:
 		pack = &soundPack{name: "halo", fs: haloAudio, dir: "audio/halo", mode: modeRandom}
+	case laughMode:
+		pack = &soundPack{name: "laugh", fs: laughAudio, dir: "audio/laugh", mode: modeRandom}
 	default:
 		pack = &soundPack{name: "pain", fs: painAudio, dir: "audio/pain", mode: modeRandom}
 	}

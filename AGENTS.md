@@ -48,7 +48,8 @@ spank/
 ├── audio/
 │   ├── pain/            # Default "ow!" responses (10 MP3s)
 │   ├── sexy/            # Escalating responses (60 MP3s)
-│   └── halo/            # Halo death sounds (9 MP3s)
+│   ├── halo/            # Halo death sounds (9 MP3s)
+│   └── laugh/           # Laugh audio clips (10 MP3s)
 ├── go.mod
 ├── .goreleaser.yaml     # Release configuration
 └── .github/workflows/   # CI/CD
@@ -114,7 +115,7 @@ Key tuning parameters in `main.go`:
 
 4. **Single file**: All code is in `main.go`. When adding features, follow the existing pattern of types and functions in the same file.
 
-5. **Mutually exclusive modes**: `--sexy`, `--halo`, and `--custom` flags cannot be combined.
+5. **Mutually exclusive modes**: `--sexy`, `--halo`, `--laugh`, and `--custom` flags cannot be combined.
 
 6. **CGO disabled**: Builds use `CGO_ENABLED=0` despite targeting macOS.
 
