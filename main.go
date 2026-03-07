@@ -55,6 +55,7 @@ var (
 	volumeScaling  bool
 	paused         bool
 	pausedMu       sync.RWMutex
+	speedRatio     float64
 )
 
 // sensorReady is closed once shared memory is created and the sensor
@@ -81,6 +82,9 @@ const (
 
 	// defaultCooldownMs is the default cooldown between audio responses.
 	defaultCooldownMs = 750
+
+	// defaultSpeedRatio is the default playback speed (1.0 = normal).
+	defaultSpeedRatio = 1.0
 
 	// defaultSensorPollInterval is how often we check for new accelerometer data.
 	defaultSensorPollInterval = 10 * time.Millisecond
@@ -256,6 +260,7 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 	cmd.Flags().IntVar(&cooldownMs, "cooldown", defaultCooldownMs, "Cooldown between responses in milliseconds")
 	cmd.Flags().BoolVar(&stdioMode, "stdio", false, "Enable stdio mode: JSON output and stdin commands (for GUI integration)")
 	cmd.Flags().BoolVar(&volumeScaling, "volume-scaling", false, "Scale playback volume by slap amplitude (harder hits = louder)")
+	cmd.Flags().Float64Var(&speedRatio, "speed", defaultSpeedRatio, "Playback speed multiplier (0.5 = half speed, 2.0 = double speed)")
 
 	if err := fang.Execute(context.Background(), cmd); err != nil {
 		os.Exit(1)
@@ -536,6 +541,14 @@ func playAudio(pack *soundPack, path string, amplitude float64, speakerInit *boo
 		}
 	}
 
+	// Apply speed change via resampling trick:
+	// Claiming the audio is at rate*speed and resampling back to rate
+	// makes the speaker consume samples faster/slower.
+	if speedRatio != 1.0 && speedRatio > 0 {
+		fakeRate := beep.SampleRate(int(float64(format.SampleRate) * speedRatio))
+		source = beep.Resample(4, fakeRate, format.SampleRate, source)
+	}
+
 	done := make(chan bool)
 	speaker.Play(beep.Seq(source, beep.Callback(func() {
 		done <- true
@@ -548,6 +561,7 @@ type stdinCommand struct {
 	Cmd       string  `json:"cmd"`
 	Amplitude float64 `json:"amplitude,omitempty"`
 	Cooldown  int     `json:"cooldown,omitempty"`
+	Speed     float64 `json:"speed,omitempty"`
 }
 
 // readStdinCommands reads JSON commands from stdin for live control
@@ -595,8 +609,11 @@ func processCommands(r io.Reader, w io.Writer) {
 			if cmd.Cooldown > 0 {
 				cooldownMs = cmd.Cooldown
 			}
+			if cmd.Speed > 0 {
+				speedRatio = cmd.Speed
+			}
 			if stdioMode {
-				fmt.Fprintf(w, `{"status":"settings_updated","amplitude":%.4f,"cooldown":%d}%s`, minAmplitude, cooldownMs, "\n")
+				fmt.Fprintf(w, `{"status":"settings_updated","amplitude":%.4f,"cooldown":%d,"speed":%.2f}%s`, minAmplitude, cooldownMs, speedRatio, "\n")
 			}
 		case "volume-scaling":
 			volumeScaling = !volumeScaling
@@ -608,7 +625,7 @@ func processCommands(r io.Reader, w io.Writer) {
 			isPaused := paused
 			pausedMu.RUnlock()
 			if stdioMode {
-				fmt.Fprintf(w, `{"status":"ok","paused":%t,"amplitude":%.4f,"cooldown":%d,"volume_scaling":%t}%s`, isPaused, minAmplitude, cooldownMs, volumeScaling, "\n")
+				fmt.Fprintf(w, `{"status":"ok","paused":%t,"amplitude":%.4f,"cooldown":%d,"volume_scaling":%t,"speed":%.2f}%s`, isPaused, minAmplitude, cooldownMs, volumeScaling, speedRatio, "\n")
 			}
 		default:
 			if stdioMode {

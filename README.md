@@ -57,6 +57,11 @@ sudo spank --sexy --min-amplitude 0.2
 
 # Set cooldown period in millisecond (default: 750)
 sudo spank --cooldown 600
+
+# Set playback speed multiplier (default: 1.0)
+sudo spank --speed 0.7   # slower and deeper
+sudo spank --speed 1.5   # faster
+sudo spank --sexy --speed 0.6
 ```
 
 ### Modes
@@ -206,7 +211,8 @@ sudo launchctl unload /Library/LaunchDaemons/com.taigrr.spank.plist
 2. Runs vibration detection (STA/LTA, CUSUM, kurtosis, peak/MAD)
 3. When a significant impact is detected, plays an embedded MP3 response
 4. **Optional volume scaling** (`--volume-scaling`) — light taps play quietly, hard slaps play at full volume
-5. 750ms cooldown between responses to prevent rapid-fire, adjustable with `--cooldown`
+5. **Optional speed control** (`--speed`) — adjusts playback speed and pitch (0.5 = half speed, 2.0 = double speed)
+6. 750ms cooldown between responses to prevent rapid-fire, adjustable with `--cooldown`
 
 ## Star History
 

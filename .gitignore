@@ -4,3 +4,4 @@ dist/
 .crush
 spank.test
 result
+.vscode/
