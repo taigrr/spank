@@ -32,6 +32,16 @@ go install github.com/taigrr/spank@latest
 > sudo cp "$(go env GOPATH)/bin/spank" /usr/local/bin/spank
 > ```
 
+## Easy Installation (Windows)
+
+For users who just want to enjoy the sounds without being technical:
+
+1.  **Download**: Get the latest `spank.exe` and `spank-me.bat` from the [Releases](https://github.com/taigrr/spank/releases).
+2.  **Run**: Double-click `spank-me.bat`.
+3.  **Select & Enjoy**: Pick your mode (Pain, Sexy, or Halo) and tap your touchpad to hear the responses!
+
+_(Requires Windows 10 or 11. No extra software needed.)_
+
 ## Usage
 
 ```bash

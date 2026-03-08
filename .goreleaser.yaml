@@ -10,8 +10,10 @@ builds:
       - GOPRIVATE=github.com/taigrr/apple-silicon-accelerometer
     goos:
       - darwin
+      - windows
     goarch:
       - arm64
+      - amd64
     ldflags:
       - -s -w -X main.version={{.Version}}
 
