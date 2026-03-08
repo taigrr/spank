@@ -213,10 +213,7 @@ func (st *slapTracker) getFile(score float64) string {
 	// At sustained max slap rate, score reaches ssMax which maps
 	// to the final file.
 	maxIdx := len(st.pack.files) - 1
-	idx := int(float64(len(st.pack.files)) * (1.0 - math.Exp(-(score-1)/st.scale)))
-	if idx > maxIdx {
-		idx = maxIdx
-	}
+	idx := min(int(float64(len(st.pack.files)) * (1.0 - math.Exp(-(score-1)/st.scale))), maxIdx)
 	return st.pack.files[idx]
 }
 
@@ -425,7 +422,7 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 		}
 
 		ev := det.Events[len(det.Events)-1]
-		if ev.Time == lastEventTime {
+		if ev.Time.Equal(lastEventTime) {
 			continue
 		}
 		lastEventTime = ev.Time
