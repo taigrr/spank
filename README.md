@@ -68,7 +68,7 @@ sudo spank --sexy --speed 0.6
 
 **Pain mode** (default): Randomly plays from 10 pain/protest audio clips when a slap is detected.
 
-**Sexy mode** (`--sexy`): Tracks slaps within a rolling 5-minute window. The more you slap, the more intense the audio response. 60 levels of escalation.
+**Sexy mode** (`--sexy`): Tracks slaps with a 30-second decay half-life. The more you slap, the more intense the audio response. 60 levels of escalation.
 
 **Halo mode** (`--halo`): Randomly plays from death sound effects from the Halo video game series when a slap is detected.
 
