@@ -19,17 +19,11 @@ func runAccel(_ context.Context, _ *soundPack, _ runtimeTuning) error {
 // runMic runs the microphone-based knock detection path using arecord (ALSA).
 // It does not require root privileges.
 func runMic(ctx context.Context, pack *soundPack, tuning runtimeTuning) error {
-	threshold := micThreshold
-	if fastMode && threshold == 0.02 {
-		// Lower default threshold for fast mode.
-		threshold = 0.01
-	}
-
 	cfg := mic.Config{
 		Device:     micDevice,
 		Channels:   4,
 		SampleRate: 48000,
-		Threshold:  threshold,
+		Threshold:  micThreshold,
 		Cooldown:   tuning.cooldown,
 	}
 

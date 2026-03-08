@@ -141,10 +141,10 @@ func computeRMS(data []byte, channels int) float64 {
 
 	const bytesPerSample = 2
 	frameSize := channels * bytesPerSample
-	numFrames := len(data) / frameSize
-	if numFrames == 0 {
+	if len(data) < frameSize {
 		return 0
 	}
+	numFrames := len(data) / frameSize
 
 	var sumSq float64
 	totalSamples := numFrames * channels
