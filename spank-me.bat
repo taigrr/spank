@@ -1,8 +1,8 @@
 @echo off
 setlocal
-title SPANK - Windows Launcher
+title SPANK - Windows Launcher - MADE BY SOUMIC :)
 echo ==========================================
-echo    SPANK - Windows Interactive Launcher
+echo    SPANK - Windows Interactive Launcher For Widows Users.
 echo ==========================================
 echo.
 echo Please choose your Audio Pack:

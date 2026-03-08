@@ -24,6 +24,10 @@ archives:
       {{- .Version }}_
       {{- .Os }}_
       {{- .Arch }}
+    files:
+      - src: spank-me.bat
+        dst: spank-me.bat
+        format: binary
 
 checksum:
   name_template: checksums.txt
