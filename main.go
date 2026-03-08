@@ -427,10 +427,10 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 		}
 		lastEventTime = ev.Time
 
-		if time.Since(lastYell) <= tuning.cooldown {
+		if time.Since(lastYell) <= time.Duration(cooldownMs)*time.Millisecond {
 			continue
 		}
-		if ev.Amplitude < tuning.minAmplitude {
+		if ev.Amplitude < minAmplitude {
 			continue
 		}
 
