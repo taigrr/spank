@@ -15,6 +15,7 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -28,8 +29,6 @@ import (
 	"github.com/gopxl/beep/v2/speaker"
 	"github.com/spf13/cobra"
 	"github.com/taigrr/apple-silicon-accelerometer/detector"
-	"github.com/taigrr/apple-silicon-accelerometer/sensor"
-	"github.com/taigrr/apple-silicon-accelerometer/shm"
 )
 
 var version = "dev"
@@ -56,11 +55,9 @@ var (
 	paused         bool
 	pausedMu       sync.RWMutex
 	speedRatio     float64
+	simulateMode   bool
+	mouseMode      bool
 )
-
-// sensorReady is closed once shared memory is created and the sensor
-// worker is about to enter the CFRunLoop.
-var sensorReady = make(chan struct{})
 
 // sensorErr receives any error from the sensor worker.
 var sensorErr = make(chan error, 1)
@@ -258,6 +255,8 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 	cmd.Flags().BoolVar(&stdioMode, "stdio", false, "Enable stdio mode: JSON output and stdin commands (for GUI integration)")
 	cmd.Flags().BoolVar(&volumeScaling, "volume-scaling", false, "Scale playback volume by slap amplitude (harder hits = louder)")
 	cmd.Flags().Float64Var(&speedRatio, "speed", defaultSpeedRatio, "Playback speed multiplier (0.5 = half speed, 2.0 = double speed)")
+	cmd.Flags().BoolVar(&simulateMode, "simulate", false, "Simulation mode: trigger a fake slap every 3 seconds for testing")
+	cmd.Flags().BoolVarP(&mouseMode, "mouse", "M", false, "Mouse mode: trigger a slap on left click or touchpad tap")
 
 	if err := fang.Execute(context.Background(), cmd); err != nil {
 		os.Exit(1)
@@ -265,7 +264,8 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 }
 
 func run(ctx context.Context, tuning runtimeTuning) error {
-	if os.Geteuid() != 0 {
+	// Check for privileges (macOS/Linux only)
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
 		return fmt.Errorf("spank requires root privileges for accelerometer access, run with: sudo spank")
 	}
 
@@ -323,43 +323,18 @@ func run(ctx context.Context, tuning runtimeTuning) error {
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Create shared memory for accelerometer data.
-	accelRing, err := shm.CreateRing(shm.NameAccel)
+	// Initialize sensor (platform-specific bridge)
+	accelRing, err := initSensor(ctx, simulateMode)
 	if err != nil {
-		return fmt.Errorf("creating accel shm: %w", err)
+		return err
 	}
 	defer accelRing.Close()
 	defer accelRing.Unlink()
 
-	// Start the sensor worker in a background goroutine.
-	// sensor.Run() needs runtime.LockOSThread for CFRunLoop, which it
-	// handles internally. We launch detection on the current goroutine.
-	go func() {
-		close(sensorReady)
-		if err := sensor.Run(sensor.Config{
-			AccelRing: accelRing,
-			Restarts:  0,
-		}); err != nil {
-			sensorErr <- err
-		}
-	}()
-
-	// Wait for sensor to be ready.
-	select {
-	case <-sensorReady:
-	case err := <-sensorErr:
-		return fmt.Errorf("sensor worker failed: %w", err)
-	case <-ctx.Done():
-		return nil
-	}
-
-	// Give the sensor a moment to start producing data.
-	time.Sleep(sensorStartupDelay)
-
 	return listenForSlaps(ctx, pack, accelRing, tuning)
 }
 
-func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuffer, tuning runtimeTuning) error {
+func listenForSlaps(ctx context.Context, pack *soundPack, accelRing RingBuffer, tuning runtimeTuning) error {
 	tracker := newSlapTracker(pack, tuning.cooldown)
 	speakerInit := false
 	det := detector.New()
@@ -381,8 +356,31 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 		fmt.Println(`{"status":"ready"}`)
 	}
 
+	// Mouse trigger hook
+	if mouseMode {
+		go startMouseTrigger(ctx, func() {
+			// Trigger a fake slap event via the tracker
+			num, score := tracker.record(time.Now())
+			file := tracker.getFile(score)
+			if stdioMode {
+				// Log it for JSON mode
+			} else {
+				fmt.Printf("slap #%d [TAP] -> %s\n", num, file)
+			}
+			go playAudio(pack, file, 0.8, &speakerInit)
+		})
+	}
+
 	ticker := time.NewTicker(tuning.pollInterval)
 	defer ticker.Stop()
+
+	// Simulation ticker
+	var simTicker *time.Ticker
+	if simulateMode {
+		fmt.Println("spank: SIMULATION MODE ACTIVE - triggering fake slap every 3 seconds")
+		simTicker = time.NewTicker(3 * time.Second)
+		defer simTicker.Stop()
+	}
 
 	for {
 		select {
@@ -392,6 +390,21 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 		case err := <-sensorErr:
 			return fmt.Errorf("sensor worker failed: %w", err)
 		case <-ticker.C:
+		case <-func() <-chan time.Time {
+			if simTicker != nil {
+				return simTicker.C
+			}
+			return nil
+		}():
+			if simulateMode {
+				// Inject a fake high-amplitude event
+				fmt.Println("spank: [SIM] Triggering fake slap...")
+				num, score := tracker.record(time.Now())
+				file := tracker.getFile(score)
+				fmt.Printf("slap #%d [SIMULATED] -> %s\n", num, file)
+				go playAudio(pack, file, 0.8, &speakerInit)
+				continue
+			}
 		}
 
 		// Check if paused
@@ -405,7 +418,9 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 		now := time.Now()
 		tNow := float64(now.UnixNano()) / 1e9
 
-		samples, newTotal := accelRing.ReadNew(lastAccelTotal, shm.AccelScale)
+		// AccelScale is usually 1.0/16384.0 for BMI286, we'll use a local constant or just pass 1.0
+		// and let the sensor bridge handle normalization to g-force.
+		samples, newTotal := accelRing.ReadNew(lastAccelTotal, 1.0)
 		lastAccelTotal = newTotal
 		if len(samples) > tuning.maxBatch {
 			samples = samples[len(samples)-tuning.maxBatch:]

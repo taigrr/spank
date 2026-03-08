@@ -12,8 +12,8 @@ Uses the Apple Silicon accelerometer (Bosch BMI286 IMU via IOKit HID) to detect 
 
 ## Requirements
 
-- macOS on Apple Silicon (M2+)
-- `sudo` (for IOKit HID accelerometer access)
+- macOS on Apple Silicon (M2+) or Windows 10/11 with an onboard accelerometer
+- `sudo` (macOS) or Administrator (Windows)
 - Go 1.26+ (if building from source)
 
 ## Install
@@ -27,6 +27,7 @@ go install github.com/taigrr/spank@latest
 ```
 
 > **Note:** `go install` places the binary in `$GOBIN` (if set) or `$(go env GOPATH)/bin` (which defaults to `~/go/bin`). Copy it to a system path so `sudo spank` works. For example, with the default Go settings:
+>
 > ```bash
 > sudo cp "$(go env GOPATH)/bin/spank" /usr/local/bin/spank
 > ```
@@ -62,6 +63,9 @@ sudo spank --cooldown 600
 sudo spank --speed 0.7   # slower and deeper
 sudo spank --speed 1.5   # faster
 sudo spank --sexy --speed 0.6
+
+# Mouse mode — trigger slaps with touchpad taps or mouse clicks (Windows only)
+./spank.exe --mouse
 ```
 
 ### Modes
@@ -207,7 +211,7 @@ sudo launchctl unload /Library/LaunchDaemons/com.taigrr.spank.plist
 
 ## How it works
 
-1. Reads raw accelerometer data directly via IOKit HID (Apple SPU sensor)
+1. Reads raw accelerometer data (IOKit HID on macOS, Windows Sensor API on Windows)
 2. Runs vibration detection (STA/LTA, CUSUM, kurtosis, peak/MAD)
 3. When a significant impact is detected, plays an embedded MP3 response
 4. **Optional volume scaling** (`--volume-scaling`) — light taps play quietly, hard slaps play at full volume

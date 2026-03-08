@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/charmbracelet/fang v0.4.4
+	github.com/go-ole/go-ole v1.3.0
 	github.com/gopxl/beep/v2 v2.1.1
 	github.com/spf13/cobra v1.10.2
 	github.com/taigrr/apple-silicon-accelerometer v0.1.0
