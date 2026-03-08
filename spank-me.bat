@@ -2,7 +2,7 @@
 setlocal
 title SPANK - Windows Launcher - MADE BY SOUMIC :)
 echo ==========================================
-echo    SPANK - Windows Interactive Launcher For Widows Users.
+echo    SPANK - Windows Interactive Launcher For Widows Users made by - (Soumic) Github:- /Soumic28.
 echo ==========================================
 echo.
 echo Please choose your Audio Pack:
