@@ -1,4 +1,4 @@
-{ lib, buildGoModule, go_1_26 }:
+{ lib, buildGoModule, go_1_26, alsa-utils, stdenv }:
 
 buildGoModule.override { go = go_1_26; } {
   pname = "spank";
@@ -14,11 +14,14 @@ buildGoModule.override { go = go_1_26; } {
   # Tests require Apple Silicon accelerometer hardware
   doCheck = false;
 
+  # On Linux, wrap the binary so arecord is on PATH
+  nativeBuildInputs = lib.optionals (!stdenv.isDarwin) [ alsa-utils ];
+
   meta = {
     description = "Yells 'ow!' when you slap the laptop";
     homepage = "https://github.com/taigrr/spank";
     license = lib.licenses.mit;
-    platforms = [ "aarch64-darwin" ];
+    platforms = [ "aarch64-darwin" "x86_64-linux" "aarch64-linux" ];
     mainProgram = "spank";
   };
 }
