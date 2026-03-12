@@ -16,6 +16,65 @@ Uses the Apple Silicon accelerometer (Bosch BMI286 IMU via IOKit HID) to detect 
 - `sudo` (for IOKit HID accelerometer access)
 - Go 1.26+ (if building from source)
 
+## Linux Support (Non-Apple Hardware)
+
+On Linux laptops without an Apple Silicon accelerometer, spank supports
+microphone-based knock detection via `--mic`. This uses the built-in
+microphone to listen for sharp impact sounds.
+
+### Requirements (Linux)
+
+- `alsa-utils` (provides `arecord`) — `nix-shell -p alsa-utils` or `apt install alsa-utils`
+
+### Finding your microphone device
+
+```bash
+arecord -l
+```
+
+Common devices:
+- `hw:0,0` — HDA Analog (headphone jack mic)
+- `hw:0,6` — DMIC (built-in digital mic array) ← **recommended**
+- `default` — system default
+
+> **Note for `sof-hda-dsp` users (Intel/AMD laptops):** The DMIC requires
+> exactly 4 channels at 48000 Hz. spank handles this automatically with the
+> default `--mic-device hw:0,6`.
+
+### Usage
+
+```bash
+# Basic mic mode
+spank --mic
+
+# With built-in sound packs
+spank --mic --sexy
+spank --mic --halo
+
+# With custom sounds
+spank --mic --custom /path/to/mp3s
+
+# Specify ALSA device
+spank --mic --mic-device hw:0,6
+
+# Tune sensitivity (lower = more sensitive, default: 0.02)
+spank --mic --mic-threshold 0.015   # more sensitive
+spank --mic --mic-threshold 0.05    # less sensitive
+
+# NixOS (no install required)
+nix run github:taigrr/spank -- --mic --custom ~/sounds
+```
+
+### NixOS home-manager
+
+```nix
+programs.spank = {
+  enable = true;
+  micMode = true;
+  micDevice = "hw:0,6";
+};
+```
+
 ## Install
 
 Download from the [latest release](https://github.com/taigrr/spank/releases/latest).

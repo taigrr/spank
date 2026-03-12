@@ -52,6 +52,24 @@ in
       default = null;
       description = "Path to custom MP3 audio directory.";
     };
+
+    micMode = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Use microphone-based knock detection (Linux only).";
+    };
+
+    micDevice = lib.mkOption {
+      type = lib.types.str;
+      default = "hw:0,6";
+      description = "ALSA capture device for mic mode (use 'arecord -l' to list devices).";
+    };
+
+    micThreshold = lib.mkOption {
+      type = lib.types.nullOr lib.types.float;
+      default = null;
+      description = "RMS amplitude threshold for mic mode (0.0-1.0, lower = more sensitive).";
+    };
   };
 
   config = lib.mkIf cfg.enable {
