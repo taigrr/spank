@@ -18,6 +18,12 @@ Uses the Apple Silicon accelerometer (Bosch BMI286 IMU via IOKit HID) to detect 
 - `sudo` (for IOKit HID accelerometer access)
 - Go 1.26+ (if building from source)
 
+## Confirmed Working Hardware
+
+| Chip | Model | macOS | Accelerometer | Status |
+|------|-------|-------|---------------|--------|
+| Apple M1 Pro | MacBookPro18,1 (16", 2021) | 15.2 (24C101) | Apple HID Accelerometer (SPI, VendorID: 1452, ProductID: 835) | Builds and runs |
+
 ## Install
 
 Download from the [latest release](https://github.com/taigrr/spank/releases/latest).
