@@ -43,7 +43,11 @@ var sexyAudio embed.FS
 //go:embed audio/halo/*.mp3
 var haloAudio embed.FS
 
+//go:embed audio/zero-hour/*.mp3
+var zeroHourAudio embed.FS
+
 var (
+	zeroHourMode bool
 	sexyMode     bool
 	haloMode     bool
 	customPath   string
@@ -250,6 +254,7 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 
 	cmd.Flags().BoolVarP(&sexyMode, "sexy", "s", false, "Enable sexy mode")
 	cmd.Flags().BoolVarP(&haloMode, "halo", "H", false, "Enable halo mode")
+	cmd.Flags().BoolVarP(&zeroHourMode, "zero-hour", "z", false, "Enable zero hour mode (General Z)")
 	cmd.Flags().StringVarP(&customPath, "custom", "c", "", "Path to custom MP3 audio directory")
 	cmd.Flags().BoolVar(&fastMode, "fast", false, "Enable faster detection tuning (shorter cooldown, higher sensitivity)")
 	cmd.Flags().StringSliceVar(&customFiles, "custom-files", nil, "Comma-separated list of custom MP3 files")
@@ -273,6 +278,9 @@ func run(ctx context.Context, tuning runtimeTuning) error {
 	if sexyMode {
 		modeCount++
 	}
+	if zeroHourMode {
+		modeCount++
+	}
 	if haloMode {
 		modeCount++
 	}
@@ -280,7 +288,7 @@ func run(ctx context.Context, tuning runtimeTuning) error {
 		modeCount++
 	}
 	if modeCount > 1 {
-		return fmt.Errorf("--sexy, --halo, and --custom/--custom-files are mutually exclusive; pick one")
+		return fmt.Errorf("--sexy, --zero-hour, --halo, and --custom/--custom-files are mutually exclusive; pick one")
 	}
 
 	if tuning.minAmplitude < 0 || tuning.minAmplitude > 1 {
@@ -307,6 +315,8 @@ func run(ctx context.Context, tuning runtimeTuning) error {
 		pack = &soundPack{name: "custom", dir: customPath, mode: modeRandom, custom: true}
 	case sexyMode:
 		pack = &soundPack{name: "sexy", fs: sexyAudio, dir: "audio/sexy", mode: modeEscalation}
+	case zeroHourMode:
+		pack = &soundPack{name: "zero-hour", fs: zeroHourAudio, dir: "audio/zero-hour", mode: modeRandom}
 	case haloMode:
 		pack = &soundPack{name: "halo", fs: haloAudio, dir: "audio/halo", mode: modeRandom}
 	default:
