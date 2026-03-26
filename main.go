@@ -265,6 +265,9 @@ Use --halo to play random audio clips from Halo soundtracks on each slap.`,
 }
 
 func run(ctx context.Context, tuning runtimeTuning) error {
+	minAmplitude = tuning.minAmplitude
+	cooldownMs = int(tuning.cooldown.Milliseconds())
+
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("spank requires root privileges for accelerometer access, run with: sudo spank")
 	}
