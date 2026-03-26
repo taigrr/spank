@@ -154,10 +154,16 @@ func setStatus(running bool) {
 // EventLoop blocks and handles all menu item clicks.
 // Call this in a goroutine.
 func EventLoop() {
-	// Watch for slap events to keep status accurate
+	// Watch for slap events and daemon errors to keep status accurate
 	go func() {
-		for range mgr.SlapEvents {
-			// Could update slap counter here in future
+		for {
+			select {
+			case <-mgr.SlapEvents:
+				// Could update slap counter here in future
+			case err := <-mgr.Errors:
+				showError("Daemon stopped", err.Error())
+				setStatus(false)
+			}
 		}
 	}()
 
@@ -226,7 +232,7 @@ func EventLoop() {
 
 func startDaemon() {
 	// Ensure sudoers is installed first
-	if !daemon.IsSudoersInstalled() {
+	if !daemon.IsSudoersInstalled() || !daemon.SudoersMatchesPath() {
 		if err := daemon.InstallSudoers(); err != nil {
 			showError("Setup failed", err.Error())
 			return

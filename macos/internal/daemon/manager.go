@@ -93,6 +93,7 @@ func (m *Manager) Stop() error {
 	// Close stdin to signal EOF to spankd
 	_ = m.stdin.Close()
 	_ = m.cmd.Process.Kill()
+	m.running = false
 	return nil
 }
 
@@ -201,8 +202,16 @@ func (m *Manager) waitLoop() {
 		_ = m.cmd.Wait()
 	}
 	m.mu.Lock()
+	wasRunning := m.running
 	m.running = false
 	m.cmd = nil
 	m.stdin = nil
 	m.mu.Unlock()
+
+	if wasRunning {
+		select {
+		case m.Errors <- fmt.Errorf("spankd process exited"):
+		default:
+		}
+	}
 }
