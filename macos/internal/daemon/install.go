@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const sudoersFile = "/etc/sudoers.d/com.taigrr.spankd"
+const sudoersFile = "/etc/sudoers.d/spankd"
 
 // SpankdPath returns the absolute path to the spankd binary,
 // located alongside the running SpankUI executable.
@@ -41,7 +41,7 @@ func InstallSudoers() error {
 	}
 
 	content := fmt.Sprintf("ALL ALL=(root) NOPASSWD: %s\n", spankd)
-	tmpFile := "/tmp/com.taigrr.spankd.sudoers"
+	tmpFile := "/tmp/spankd_sudoers"
 
 	// Write using Go — avoids all shell quoting/newline problems.
 	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
