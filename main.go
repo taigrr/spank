@@ -470,6 +470,12 @@ func listenForSlaps(ctx context.Context, pack *soundPack, accelRing *shm.RingBuf
 
 var speakerMu sync.Mutex
 
+// speakerSampleRate is the sample rate the speaker was initialized with.
+// The speaker is initialized exactly once, using the rate of the first
+// file played. Every subsequent file must be resampled to this rate or it
+// will play at the wrong speed/pitch.
+var speakerSampleRate beep.SampleRate
+
 // amplitudeToVolume maps a detected amplitude to a beep/effects.Volume
 // level. Amplitude typically ranges from ~0.05 (light tap) to ~1.0+
 // (hard slap). The mapping uses a logarithmic curve so that light taps
@@ -501,6 +507,23 @@ func amplitudeToVolume(amplitude float64) float64 {
 	t = math.Log(1+t*99) / math.Log(100)
 
 	return minVol + t*(maxVol-minVol)
+}
+
+// resampleForPlayback wraps source so it is delivered at speakerRate, folding
+// in an optional playback speed change. Files in a custom pack may have varied
+// sample rates (e.g. mixed 44.1kHz/48kHz from WAV->MP3 conversion); without
+// resampling to the speaker's fixed rate they play sped up or slowed down. The
+// speed change reuses the same resample by claiming the source rate is
+// fileRate*speed.
+func resampleForPlayback(source beep.Streamer, fileRate, speakerRate beep.SampleRate, speed float64) beep.Streamer {
+	srcRate := fileRate
+	if speed != 1.0 && speed > 0 {
+		srcRate = beep.SampleRate(int(float64(fileRate) * speed))
+	}
+	if srcRate == speakerRate {
+		return source
+	}
+	return beep.Resample(4, srcRate, speakerRate, source)
 }
 
 func playAudio(pack *soundPack, path string, amplitude float64, speakerInit *bool) {
@@ -536,8 +559,10 @@ func playAudio(pack *soundPack, path string, amplitude float64, speakerInit *boo
 	speakerMu.Lock()
 	if !*speakerInit {
 		speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
+		speakerSampleRate = format.SampleRate
 		*speakerInit = true
 	}
+	targetRate := speakerSampleRate
 	speakerMu.Unlock()
 
 	// Optionally scale volume based on slap amplitude
@@ -551,13 +576,11 @@ func playAudio(pack *soundPack, path string, amplitude float64, speakerInit *boo
 		}
 	}
 
-	// Apply speed change via resampling trick:
-	// Claiming the audio is at rate*speed and resampling back to rate
-	// makes the speaker consume samples faster/slower.
-	if speedRatio != 1.0 && speedRatio > 0 {
-		fakeRate := beep.SampleRate(int(float64(format.SampleRate) * speedRatio))
-		source = beep.Resample(4, fakeRate, format.SampleRate, source)
-	}
+	// Resample to the speaker's rate. The speaker is initialized once with
+	// the first file's rate; any file with a different rate would otherwise
+	// play at the wrong speed/pitch. The --speed flag is folded into the same
+	// resample by claiming the source is at fileRate*speed.
+	source = resampleForPlayback(source, format.SampleRate, targetRate, speedRatio)
 
 	done := make(chan bool)
 	speaker.Play(beep.Seq(source, beep.Callback(func() {
