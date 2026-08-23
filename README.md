@@ -223,7 +223,7 @@ sudo launchctl unload /Library/LaunchDaemons/com.taigrr.spank.plist
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=taigrr/spank&type=date&legend=top-left)](https://www.star-history.com/#taigrr/spank&type=date&legend=top-left)
+[![Star History Chart](https://afterglow.watch/svg?repos=taigrr/spank&type=date&legend=top-left)](https://afterglow.watch)
 
 ## Credits
 
